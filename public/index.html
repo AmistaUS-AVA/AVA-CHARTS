@@ -185,13 +185,24 @@
     <button class="act" id="clearAll">Clear</button>
     <button class="act danger" id="deleteBtn" title="Permanently delete the saved diagram">Delete</button>
     <span class="status" id="status"></span>
-    <span class="hint">Drag boxes across lanes · drag a dot to connect · double-click to rename · hover a lane for its controls</span>
+    <span class="hint">Drag boxes · drag a dot to connect · double-click a box, lane, or line to label it · hover a lane for controls</span>
   </div>
 
   <div class="ctxbar" id="ctxbar" style="display:none">
-    <span id="ctxColorLabel">Box colour</span>
-    <span class="swatches" id="swatches"></span>
-    <button class="act" id="dashBtn" title="Toggle dashed line for the selected arrow">Dashed line</button>
+    <span id="nodeCtl" style="display:inline-flex; align-items:center; gap:8px;">
+      <span id="ctxColorLabel">Box colour</span>
+      <span class="swatches" id="swatches"></span>
+    </span>
+    <span id="linkCtl" style="display:none; align-items:center; gap:6px; flex-wrap:wrap;">
+      <button class="act" id="dashBtn" title="Toggle dashed line for the selected arrow">Dashed</button>
+      <span style="margin-left:6px">Label:</span>
+      <button class="act lbl" data-label="Yes">Yes</button>
+      <button class="act lbl" data-label="No">No</button>
+      <button class="act lbl" data-label="True">True</button>
+      <button class="act lbl" data-label="False">False</button>
+      <button class="act lbl" data-label="">Clear</button>
+      <button class="act danger" id="delLinkBtn">Delete line</button>
+    </span>
   </div>
 
   <div class="stage" id="stage">
@@ -342,10 +353,10 @@
     if(selected && selected.kind==='node' && selected.id===id) selected=null;
     render();
   }
-  function addLink(from, to, fromSide, toSide, dashed){
+  function addLink(from, to, fromSide, toSide, dashed, label){
     if(from===to) return;
     if(links.some(l=>l.from===from && l.to===to)) return;
-    links.push({id:nid(), from, to, fromSide, toSide, dashed: !!dashed});
+    links.push({id:nid(), from, to, fromSide, toSide, dashed: !!dashed, label: label||''});
   }
   function removeLink(id){
     const i = links.findIndex(l=>l.id===id); if(i<0) return;
@@ -530,13 +541,23 @@
     const hit = el('path',{d, fill:'none', stroke:'transparent','stroke-width':12});
     hit.style.cursor='pointer'; hit.style.pointerEvents='stroke';
     hit.addEventListener('mousedown', e=>{ e.stopPropagation(); selected={kind:'link',id:l.id}; render(); });
-    hit.addEventListener('dblclick', e=>{ e.stopPropagation(); removeLink(l.id); });
+    hit.addEventListener('dblclick', e=>{ e.stopPropagation(); editLinkLabel(l); });
     svg.appendChild(hit);
 
     const path = el('path',{d, fill:'none', stroke: sel?C.accent:C.ink, 'stroke-width': sel?2:1.5, 'marker-end':'url(#ah)'});
     if(l.dashed) path.setAttribute('stroke-dasharray','6 4');
     path.style.pointerEvents='none';
     svg.appendChild(path);
+
+    if(l.label){            // text chip at the line midpoint
+      const mx=(p1.x+p2.x)/2, my=(p1.y+p2.y)/2, fs=Math.max(10, fontSize-1);
+      const wpx=Math.max(18, l.label.length*fs*0.58+10), hpx=fs+8;
+      const lg=el('g'); lg.style.pointerEvents='none';
+      lg.appendChild(el('rect',{x:mx-wpx/2,y:my-hpx/2,width:wpx,height:hpx,rx:4,fill:C.paper,stroke:C.line}));
+      const tx=el('text',{x:mx,y:my,'text-anchor':'middle','dominant-baseline':'central','font-size':fs,fill:C.ink,'font-family':'var(--sans)'});
+      tx.textContent=l.label; lg.appendChild(tx);
+      svg.appendChild(lg);
+    }
   }
 
   function drawNode(n){
@@ -732,6 +753,30 @@
     inp.addEventListener('blur', commit, {once:true});
   }
 
+  // position an overlay input centred on an arbitrary SVG point (used for line labels)
+  function placeEditorAtSvg(sx, sy, wpx){
+    const m = svg.getScreenCTM();
+    const pt = svg.createSVGPoint(); pt.x=sx; pt.y=sy;
+    const sp = pt.matrixTransform(m);
+    const sr = stage.getBoundingClientRect();
+    const inp = document.createElement('input'); inp.className='editbox';
+    inp.style.left = (sp.x - sr.left + stage.scrollLeft - wpx/2) + 'px';
+    inp.style.top  = (sp.y - sr.top  + stage.scrollTop - 12) + 'px';
+    inp.style.width = wpx+'px'; inp.style.height='24px';
+    stage.appendChild(inp); return inp;
+  }
+  function editLinkLabel(l){
+    const a=nodeById(l.from), b=nodeById(l.to); if(!a||!b) return;
+    const p1=anchorPoint(a,l.fromSide), p2=anchorPoint(b,l.toSide);
+    selected = {kind:'link', id:l.id};
+    const inp = placeEditorAtSvg((p1.x+p2.x)/2, (p1.y+p2.y)/2, 120);
+    inp.value = l.label || '';
+    inp.focus(); inp.select();
+    const commit = ()=>{ l.label = inp.value.trim(); inp.remove(); render(); };
+    inp.addEventListener('keydown', ev=>{ if(ev.key==='Enter'){ev.preventDefault();commit();} else if(ev.key==='Escape'){inp.remove();} });
+    inp.addEventListener('blur', commit, {once:true});
+  }
+
   function startLaneResize(l, e){
     e.preventDefault(); e.stopPropagation();
     computeTops();
@@ -793,11 +838,13 @@
     if(!isNaN(v)) { fontSize = Math.max(8, Math.min(60, v)); render(); }
   });
 
-  // ---------- contextual toolbar (box colours / dashed line) ----------
+  // ---------- contextual toolbar (box colours / line style + label) ----------
   const ctxbar = document.getElementById('ctxbar');
+  const nodeCtl = document.getElementById('nodeCtl');
+  const linkCtl = document.getElementById('linkCtl');
   const swatchWrap = document.getElementById('swatches');
-  const colorLabel = document.getElementById('ctxColorLabel');
   const dashBtn = document.getElementById('dashBtn');
+  const delLinkBtn = document.getElementById('delLinkBtn');
   Object.keys(PALETTE).forEach(key=>{
     const b = document.createElement('button');
     b.className='swatch'; b.dataset.key=key;
@@ -813,21 +860,24 @@
     swatchWrap.appendChild(b);
   });
   dashBtn.addEventListener('click', ()=>{
-    if(selected && selected.kind==='link'){
-      const l=linkById(selected.id);
-      if(l){ l.dashed = !l.dashed; render(); }
-    }
+    if(selected && selected.kind==='link'){ const l=linkById(selected.id); if(l){ l.dashed=!l.dashed; render(); } }
+  });
+  delLinkBtn.addEventListener('click', ()=>{
+    if(selected && selected.kind==='link') removeLink(selected.id);
+  });
+  linkCtl.querySelectorAll('.lbl').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      if(selected && selected.kind==='link'){ const l=linkById(selected.id); if(l){ l.label = b.dataset.label; render(); } }
+    });
   });
   function updateCtxBar(){
     if(selected && selected.kind==='node'){
       const n = nodeById(selected.id);
-      ctxbar.style.display='flex';
-      colorLabel.style.display=''; swatchWrap.style.display='inline-flex'; dashBtn.style.display='none';
+      ctxbar.style.display='flex'; nodeCtl.style.display='inline-flex'; linkCtl.style.display='none';
       [...swatchWrap.children].forEach(b=> b.classList.toggle('on', !!n && ((n.fill||'default')===b.dataset.key)));
     } else if(selected && selected.kind==='link'){
       const l = linkById(selected.id);
-      ctxbar.style.display='flex';
-      colorLabel.style.display='none'; swatchWrap.style.display='none'; dashBtn.style.display='inline-flex';
+      ctxbar.style.display='flex'; nodeCtl.style.display='none'; linkCtl.style.display='inline-flex';
       dashBtn.classList.toggle('on', !!(l && l.dashed));
     } else {
       ctxbar.style.display='none';
@@ -884,6 +934,12 @@
       const p1=anchorPoint(a,l.fromSide), p2=anchorPoint(b,l.toSide);
       const dash = l.dashed ? ` stroke-dasharray="6 4"` : '';
       s += `<path d="${elbow(p1.x,p1.y,p2.x,p2.y,l.fromSide,l.toSide)}" fill="none" stroke="${C.ink}" stroke-width="1.5" marker-end="url(#ah)"${dash}/>`;
+      if(l.label){
+        const mx=(p1.x+p2.x)/2, my=(p1.y+p2.y)/2, fs=Math.max(10, baseFs-1);
+        const wpx=Math.max(18, l.label.length*fs*0.58+10), hpx=fs+8;
+        s += `<rect x="${mx-wpx/2}" y="${my-hpx/2}" width="${wpx}" height="${hpx}" rx="4" fill="${C.paper}" stroke="${C.line}"/>`;
+        s += `<text x="${mx}" y="${my}" text-anchor="middle" dominant-baseline="central" font-size="${fs}" fill="${C.ink}">${escapeXml(l.label)}</text>`;
+      }
     });
     // nodes
     nodes.forEach(n=>{
@@ -923,13 +979,13 @@
   }
   function serialize(){
     return {
-      v: 3,
+      v: 4,
       canvasWidth,
       fontSize,
       lanes: lanes.map(l=>({id:l.id, name:l.name, height:l.height})),
       cols:  cols.map(c=>({id:c.id, name:c.name, width:c.width})),
       nodes: nodes.map(n=>({id:n.id, type:n.type, text:n.text, laneId:n.laneId, lx:n.lx, ly:n.ly, w:n.w, h:n.h, fill:n.fill||null})),
-      links: links.map(l=>({id:l.id, from:l.from, to:l.to, fromSide:l.fromSide, toSide:l.toSide, dashed:!!l.dashed})),
+      links: links.map(l=>({id:l.id, from:l.from, to:l.to, fromSide:l.fromSide, toSide:l.toSide, dashed:!!l.dashed, label:l.label||''})),
     };
   }
   function deserialize(data){
@@ -948,7 +1004,7 @@
     });
     (data.links||[]).forEach(l=>{
       const from=idmap[l.from], to=idmap[l.to];
-      if(from && to) addLink(from, to, l.fromSide||'e', l.toSide||'w', l.dashed);
+      if(from && to) addLink(from, to, l.fromSide||'e', l.toSide||'w', l.dashed, l.label);
     });
     render();
   }
