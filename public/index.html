@@ -511,7 +511,10 @@
       moved=true;
       const p = toSvg(ev);
       let nx = p.x + ox, ny = p.y + oy;
-      if(snap && !ev.altKey){ nx = snapVal(nx); ny = snapVal(ny); }  // Alt bypasses
+      if(snap && !ev.altKey){                       // snap the shape's CENTRE to the grid
+        nx = snapVal(nx + n.w/2) - n.w/2;           // (so equal-row shapes share a centre line
+        ny = snapVal(ny + n.h/2) - n.h/2;           //  and connector arrows stay straight)
+      }
       const lane = laneAtY(ny + n.h/2);
       n.laneId = lane.id;
       n.lx = nx - BAND;
@@ -527,13 +530,26 @@
   function startResize(n, e){
     e.preventDefault(); e.stopPropagation();
     const sq = SQUARE(n.type);
+    const cx0 = absX(n) + n.w/2, cy0 = absY(n) + n.h/2;   // centre, kept fixed while snapping
+    const x0 = absX(n), y0 = absY(n);
     const mm = ev=>{
       const p = toSvg(ev);
-      let nw = p.x - absX(n), nh = p.y - absY(n);
-      if(snap && !ev.altKey){ nw = snapVal(nw); nh = snapVal(nh); }  // Alt bypasses
+      const snapping = snap && !ev.altKey;
+      let nw, nh;
+      if(snapping){                         // grow symmetrically so the centre stays grid-aligned
+        nw = snapVal((p.x - cx0) * 2);
+        nh = snapVal((p.y - cy0) * 2);
+      } else {                              // free corner-anchored resize (Alt or snap off)
+        nw = p.x - x0; nh = p.y - y0;
+      }
       nw = Math.max(40, nw); nh = Math.max(28, nh);
       if(sq){ const m=Math.max(nw,nh); nw=m; nh=m; }
       n.w=nw; n.h=nh;
+      if(snapping){                         // re-anchor so the (grid-aligned) centre doesn't move
+        const lane = laneById(n.laneId);
+        n.lx = (cx0 - n.w/2) - BAND;
+        if(lane) n.ly = (cy0 - lane.top) - n.h/2;
+      }
       clampNode(n);
       render();
     };
