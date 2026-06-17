@@ -65,6 +65,9 @@
   button.act.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
   button.act.primary:hover { background: #1d4fd0; }
   button.act.on { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); }
+  button.act.danger { color: var(--danger); border-color: #e6b3ad; }
+  button.act.danger:hover:not(:disabled) { background: #fdecea; }
+  button.act:disabled { opacity: .45; cursor: not-allowed; }
   .glyph { display: inline-flex; }
   .fontctl { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-soft); }
   .fontctl input { width: 56px; font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); }
@@ -165,6 +168,7 @@
     <button class="act primary" id="saveBtn">Save</button>
     <button class="act" id="shareBtn">Share link</button>
     <button class="act" id="clearAll">Clear</button>
+    <button class="act danger" id="deleteBtn" title="Permanently delete the saved diagram">Delete</button>
     <span class="status" id="status"></span>
     <span class="hint">Drag boxes (across lanes too) · select then drag the corner to resize or a dot to connect · double-click to rename</span>
   </div>
@@ -656,6 +660,7 @@
     currentId=null; currentToken=null;
     history.replaceState(null,'',location.pathname);
     addLane('Lane 1'); render();
+    refreshDeleteState();
   });
   fontInput.addEventListener('input', ()=>{
     const v = parseInt(fontInput.value,10);
@@ -791,6 +796,7 @@
       if(out.token){ currentToken = out.token; try{ localStorage.setItem('swim:token:'+out.id, out.token); }catch(_){} }
       history.replaceState(null,'', '?id='+encodeURIComponent(out.id));
       setStatus('Saved', 'ok');
+      refreshDeleteState();
     }catch(err){ setStatus('Save failed', 'err'); console.error(err); }
   }
   async function load(id){
@@ -803,6 +809,7 @@
       try{ currentToken = localStorage.getItem('swim:token:'+id); }catch(_){ currentToken=null; }
       deserialize(out.diagram || {});
       setStatus(currentToken ? 'Loaded' : 'Loaded (view only — saving makes your own copy)', 'ok');
+      refreshDeleteState();
       return true;
     }catch(err){ setStatus('Could not load diagram', 'err'); console.error(err); return false; }
   }
@@ -814,8 +821,28 @@
     catch(_){ prompt('Share this link:', url); }
   }
 
+  const deleteBtn = document.getElementById('deleteBtn');
+  function refreshDeleteState(){ if(deleteBtn) deleteBtn.disabled = !(currentId && currentToken); }
+  async function deleteDiagram(){
+    if(!currentId || !currentToken){ setStatus('Nothing to delete — save first (or you don’t own this one)', 'err'); return; }
+    if(!confirm('Permanently delete this saved diagram? This cannot be undone.')) return;
+    setStatus('Deleting…');
+    try{
+      const res = await fetch('/api/diagrams/'+encodeURIComponent(currentId), { method:'DELETE', headers:{'X-Owner-Token': currentToken} });
+      if(!res.ok) throw new Error('HTTP '+res.status);
+      try{ localStorage.removeItem('swim:token:'+currentId); }catch(_){}
+      currentId = null; currentToken = null;
+      history.replaceState(null,'', location.pathname);
+      nodes=[]; links=[]; lanes=[]; selected=null; uid=1;     // reset to a fresh canvas
+      addLane('Customer',180); addLane('Internal',180);
+      render(); refreshDeleteState();
+      setStatus('Deleted', 'ok');
+    }catch(err){ setStatus('Delete failed', 'err'); console.error(err); refreshDeleteState(); }
+  }
+
   document.getElementById('saveBtn').addEventListener('click', save);
   document.getElementById('shareBtn').addEventListener('click', share);
+  deleteBtn.addEventListener('click', deleteDiagram);
   document.addEventListener('keydown', e=>{
     if((e.metaKey||e.ctrlKey) && e.key==='s'){ e.preventDefault(); save(); }
   });
@@ -830,6 +857,7 @@
     addLane('Customer', 180);
     addLane('Internal', 180);
     render();
+    refreshDeleteState();
   })();
 })();
 </script>

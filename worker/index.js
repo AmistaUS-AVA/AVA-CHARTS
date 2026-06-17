@@ -57,9 +57,12 @@ export default class extends WorkerEntrypoint {
       return this.createOrUpdate(request);
     }
 
-    const getMatch = pathname.match(/^\/api\/diagrams\/([a-z0-9]{6,24})$/i);
-    if (getMatch && request.method === "GET") {
-      return this.getDiagram(getMatch[1]);
+    const idMatch = pathname.match(/^\/api\/diagrams\/([a-z0-9]{6,24})$/i);
+    if (idMatch && request.method === "GET") {
+      return this.getDiagram(idMatch[1]);
+    }
+    if (idMatch && request.method === "DELETE") {
+      return this.deleteDiagram(idMatch[1], request);
     }
 
     return new Response("Not found", { status: 404 });
@@ -155,5 +158,30 @@ export default class extends WorkerEntrypoint {
     }
     // Read is open (share-by-link); never expose the owner token/hash.
     return json({ id, diagram: record.diagram, updatedAt: record.updatedAt });
+  }
+
+  async deleteDiagram(id, request) {
+    const raw = await this.env.DIAGRAMS.get(`d:${id}`);
+    if (!raw) return json({ error: "Not found" }, 404);
+    let record;
+    try {
+      record = JSON.parse(raw);
+    } catch {
+      return json({ error: "Corrupt record" }, 500);
+    }
+    // Only the owner can delete. Legacy records (no tokenHash) can't prove ownership.
+    if (!record.tokenHash) {
+      return json({ error: "Diagram is read-only" }, 409);
+    }
+    const supplied =
+      request.headers.get("X-Owner-Token") ||
+      new URL(request.url).searchParams.get("token") ||
+      "";
+    const suppliedHash = supplied ? await sha256Hex(supplied) : "";
+    if (!safeEqual(suppliedHash, record.tokenHash)) {
+      return json({ error: "Not authorized to delete this diagram" }, 403);
+    }
+    await this.env.DIAGRAMS.delete(`d:${id}`);
+    return json({ ok: true });
   }
 }
