@@ -64,6 +64,7 @@
   button.tool:active { transform: translateY(1px); }
   button.act.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
   button.act.primary:hover { background: #1d4fd0; }
+  button.act.on { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); }
   .glyph { display: inline-flex; }
   .fontctl { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-soft); }
   .fontctl input { width: 56px; font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); }
@@ -78,6 +79,13 @@
     position: relative;
     background:
       linear-gradient(var(--line-soft) 1px, transparent 1px) 0 0 / 100% 20px,
+      var(--bg);
+  }
+  /* full grid shown only while snap is on, so the lock is visible */
+  .stage.snapping {
+    background:
+      linear-gradient(var(--line-soft) 1px, transparent 1px) 0 0 / 100% 20px,
+      linear-gradient(90deg, var(--line-soft) 1px, transparent 1px) 0 0 / 20px 100%,
       var(--bg);
   }
   svg#canvas { display: block; }
@@ -146,6 +154,7 @@
     </div>
     <span class="sep"></span>
     <button class="act" id="addLane">+ Lane</button>
+    <button class="act" id="snapBtn" title="Snap shapes to the grid (hold Alt to bypass)">Snap</button>
     <span class="sep"></span>
     <label class="fontctl" title="Font size for all labels">Font
       <input id="fontInput" type="number" min="10" max="40" step="1" value="13">
@@ -180,12 +189,15 @@
   let nodes = [];   // {id, type, text, laneId, lx, ly, w, h}
   let links = [];   // {id, from, to, fromSide, toSide}
   let fontSize = 13;
+  let snap = true;                // snap-to-grid (editor preference, not saved in diagram)
+  try{ const s = localStorage.getItem('swim:snap'); if(s!==null) snap = (s === '1'); }catch(_){}
   let selected = null;            // {kind:'node'|'link', id}
   let currentId = null, currentToken = null;
   let uid = 1;
   const nid = () => 'id'+(uid++);
 
   const BAND = 34;
+  const GRID = 20;   // snap-to-grid step (matches the stage background grid)
   const LANE_MIN = 90;
   let canvasWidth = 1400;
 
@@ -214,6 +226,7 @@
     for(const l of lanes){ if(y>=l.top && y<l.top+l.height) return l; }
     return lanes[lanes.length-1] || lanes[0];
   }
+  function snapVal(v){ return Math.round(v / GRID) * GRID; }
   function clampNode(n){
     const l = laneById(n.laneId); if(!l) return;
     n.lx = Math.max(2, Math.min(n.lx, canvasWidth - BAND - n.w - 2));
@@ -497,7 +510,8 @@
     const mm = ev=>{
       moved=true;
       const p = toSvg(ev);
-      const nx = p.x + ox, ny = p.y + oy;
+      let nx = p.x + ox, ny = p.y + oy;
+      if(snap && !ev.altKey){ nx = snapVal(nx); ny = snapVal(ny); }  // Alt bypasses
       const lane = laneAtY(ny + n.h/2);
       n.laneId = lane.id;
       n.lx = nx - BAND;
@@ -515,8 +529,9 @@
     const sq = SQUARE(n.type);
     const mm = ev=>{
       const p = toSvg(ev);
-      let nw = Math.max(40, p.x - absX(n));
-      let nh = Math.max(28, p.y - absY(n));
+      let nw = p.x - absX(n), nh = p.y - absY(n);
+      if(snap && !ev.altKey){ nw = snapVal(nw); nh = snapVal(nh); }  // Alt bypasses
+      nw = Math.max(40, nw); nh = Math.max(28, nh);
       if(sq){ const m=Math.max(nw,nh); nw=m; nh=m; }
       n.w=nw; n.h=nh;
       clampNode(n);
@@ -611,6 +626,14 @@
     });
   });
   document.getElementById('addLane').addEventListener('click', ()=>{ addLane(); render(); });
+  const snapBtn = document.getElementById('snapBtn');
+  function applySnapUI(){ snapBtn.classList.toggle('on', snap); stage.classList.toggle('snapping', snap); }
+  snapBtn.addEventListener('click', ()=>{
+    snap = !snap;
+    try{ localStorage.setItem('swim:snap', snap ? '1' : '0'); }catch(_){}
+    applySnapUI();
+  });
+  applySnapUI();
   document.getElementById('clearAll').addEventListener('click', ()=>{
     if(!confirm('Clear the whole diagram?')) return;
     nodes=[]; links=[]; lanes=[]; selected=null; uid=1;
