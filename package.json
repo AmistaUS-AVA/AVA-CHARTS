@@ -1,0 +1,14 @@
+{
+  "name": "swimlane-editor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Interactive swimlane process diagram editor with saved/shareable diagrams, on Cloudflare Workers.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "wrangler": "^4"
+  }
+}

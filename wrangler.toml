@@ -1,0 +1,31 @@
+name = "swimlane-editor"
+main = "worker/index.js"
+compatibility_date = "2026-06-16"
+
+# Custom domain. Wrangler provisions the DNS record + TLS on deploy,
+# provided the zone (amista-consulting.com) is on this Cloudflare account.
+routes = [
+  { pattern = "charts.amista-consulting.com", custom_domain = true }
+]
+
+# Static editor (public/index.html and any assets) is served directly.
+# Only /api/* paths invoke the Worker script; everything else is a static asset.
+[assets]
+directory = "./public/"
+binding = "ASSETS"
+run_worker_first = ["/api/*"]
+
+# KV namespace that stores saved diagrams.
+# Replace the id below with the value printed by:
+#   npx wrangler kv namespace create DIAGRAMS
+[[kv_namespaces]]
+binding = "DIAGRAMS"
+id = "43f9f53be3b147758b2e453ec214d50c"
+
+# Per-IP rate limit for API writes (Workers native rate-limiting binding).
+# 20 POSTs per 60s per client IP — generous for humans, throttles scripted abuse.
+[[unsafe.bindings]]
+name = "WRITE_LIMITER"
+type = "ratelimit"
+namespace_id = "1001"
+simple = { limit = 20, period = 60 }

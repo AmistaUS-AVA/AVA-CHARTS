@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Swimlane Editor</title>
+<style>
+  :root {
+    --ink: #3f3f46;
+    --ink-soft: #6b7280;
+    --line: #c8c8c2;
+    --line-soft: #e3e2dc;
+    --paper: #ffffff;
+    --bg: #f6f5f0;
+    --lane-band: #f0efe9;
+    --accent: #2563eb;
+    --accent-soft: #dbeafe;
+    --danger: #b42318;
+    --radius: 8px;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: var(--sans);
+    color: var(--ink);
+    background: var(--bg);
+    font-size: 13px;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--paper);
+    border-bottom: 1px solid var(--line);
+    flex-wrap: wrap;
+    z-index: 30;
+  }
+  .toolbar .title { font-weight: 600; font-size: 14px; margin-right: 6px; letter-spacing: -.2px; }
+  .palette { display: flex; gap: 6px; align-items: center; }
+  .sep { width: 1px; height: 24px; background: var(--line-soft); margin: 0 4px; }
+  button.tool, button.act {
+    font-family: var(--sans);
+    font-size: 12px;
+    color: var(--ink);
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 6px 10px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    transition: background .12s, border-color .12s;
+  }
+  button.tool:hover, button.act:hover { background: var(--lane-band); }
+  button.tool:active { transform: translateY(1px); }
+  button.act.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.act.primary:hover { background: #1d4fd0; }
+  .glyph { display: inline-flex; }
+  .fontctl { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-soft); }
+  .fontctl input { width: 56px; font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); }
+  .hint { margin-left: auto; color: var(--ink-soft); font-size: 11.5px; }
+  .status { font-size: 11.5px; color: var(--ink-soft); min-width: 60px; }
+  .status.ok { color: #15803d; }
+  .status.err { color: var(--danger); }
+
+  .stage {
+    flex: 1;
+    overflow: auto;
+    position: relative;
+    background:
+      linear-gradient(var(--line-soft) 1px, transparent 1px) 0 0 / 100% 20px,
+      var(--bg);
+  }
+  svg#canvas { display: block; }
+  svg#canvas .lane-ctrl { opacity: 0; transition: opacity .1s; }
+  svg#canvas g.lane:hover .lane-ctrl { opacity: 1; }
+  svg#canvas g.node { cursor: grab; }
+  svg#canvas g.node.dragging { cursor: grabbing; }
+  svg#canvas text { user-select: none; -webkit-user-select: none; }
+
+  /* in-place rename input overlay */
+  .editbox {
+    position: absolute;
+    z-index: 80;
+    font-family: var(--sans);
+    font-size: 12px;
+    text-align: center;
+    border: 1.5px solid var(--accent);
+    border-radius: 4px;
+    padding: 2px 4px;
+    color: var(--ink);
+    background: #fff;
+    outline: none;
+  }
+
+  /* export modal */
+  .modal-backdrop {
+    position: fixed; inset: 0;
+    background: rgba(20,20,20,.38);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 100;
+  }
+  .modal {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 18px 20px;
+    width: 320px;
+    box-shadow: 0 10px 30px rgba(0,0,0,.18);
+  }
+  .modal h3 { margin: 0 0 14px; font-size: 15px; font-weight: 600; }
+  .modal .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; font-size: 13px; color: var(--ink-soft); }
+  .modal .row input[type=range] { flex: 1; }
+  .modal .row input[type=number] { width: 80px; font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; }
+  .modal .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+</style>
+</head>
+<body>
+  <div class="toolbar">
+    <span class="title">Swimlane editor</span>
+    <div class="palette">
+      <button class="tool" data-add="event-start" title="Start event">
+        <svg class="glyph" width="16" height="16"><circle cx="8" cy="8" r="6" fill="none" stroke="#3f3f46" stroke-width="1.5"/></svg> Start
+      </button>
+      <button class="tool" data-add="task" title="Task">
+        <svg class="glyph" width="20" height="14"><rect x="1" y="1" width="18" height="12" rx="3" fill="none" stroke="#3f3f46" stroke-width="1.5"/></svg> Task
+      </button>
+      <button class="tool" data-add="gateway" title="Gateway / decision">
+        <svg class="glyph" width="16" height="16"><rect x="3.5" y="3.5" width="9" height="9" transform="rotate(45 8 8)" fill="none" stroke="#3f3f46" stroke-width="1.5"/></svg> Gateway
+      </button>
+      <button class="tool" data-add="doc" title="Document">
+        <svg class="glyph" width="16" height="16"><path d="M2 2h12v9q-3 1.6-6 0t-6 0z" fill="none" stroke="#3f3f46" stroke-width="1.5"/></svg> Document
+      </button>
+      <button class="tool" data-add="event-end" title="End event">
+        <svg class="glyph" width="16" height="16"><circle cx="8" cy="8" r="6" fill="none" stroke="#3f3f46" stroke-width="2.5"/></svg> End
+      </button>
+    </div>
+    <span class="sep"></span>
+    <button class="act" id="addLane">+ Lane</button>
+    <span class="sep"></span>
+    <label class="fontctl" title="Font size for all labels">Font
+      <input id="fontInput" type="number" min="10" max="40" step="1" value="13">
+    </label>
+    <span class="sep"></span>
+    <button class="act" id="exportSvg">Export SVG</button>
+    <span class="sep"></span>
+    <button class="act primary" id="saveBtn">Save</button>
+    <button class="act" id="shareBtn">Share link</button>
+    <button class="act" id="clearAll">Clear</button>
+    <span class="status" id="status"></span>
+    <span class="hint">Drag boxes (across lanes too) · select then drag the corner to resize or a dot to connect · double-click to rename</span>
+  </div>
+
+  <div class="stage" id="stage">
+    <svg id="canvas" xmlns="http://www.w3.org/2000/svg"></svg>
+  </div>
+
+<script>
+(function(){
+  const NS = "http://www.w3.org/2000/svg";
+  const stage  = document.getElementById('stage');
+  const svg    = document.getElementById('canvas');
+  const statusEl = document.getElementById('status');
+  const fontInput = document.getElementById('fontInput');
+
+  // palette colours (concrete hex so editor and export render identically)
+  const C = { ink:'#3f3f46', inkSoft:'#6b7280', line:'#c8c8c2', band:'#f0efe9',
+              paper:'#ffffff', accent:'#2563eb', danger:'#b42318' };
+
+  let lanes = [];   // {id, name, height, top?}
+  let nodes = [];   // {id, type, text, laneId, lx, ly, w, h}
+  let links = [];   // {id, from, to, fromSide, toSide}
+  let fontSize = 13;
+  let selected = null;            // {kind:'node'|'link', id}
+  let currentId = null, currentToken = null;
+  let uid = 1;
+  const nid = () => 'id'+(uid++);
+
+  const BAND = 34;
+  const LANE_MIN = 90;
+  let canvasWidth = 1400;
+
+  const DEF = {
+    'task':        {w:120, h:54},
+    'gateway':     {w:64,  h:64},
+    'doc':         {w:110, h:52},
+    'event-start': {w:48,  h:48},
+    'event-end':   {w:48,  h:48},
+  };
+  const SQUARE = t => (t==='gateway' || t==='event-start' || t==='event-end');
+  function defaultText(type){
+    return ({task:'Task', gateway:'Decision?', doc:'Document',
+             'event-start':'Start', 'event-end':'End'})[type] || 'Task';
+  }
+
+  // ---------- state helpers ----------
+  function laneById(id){ return lanes.find(l=>l.id===id); }
+  function nodeById(id){ return nodes.find(n=>n.id===id); }
+  function computeTops(){ let y=0; lanes.forEach(l=>{ l.top=y; y+=l.height; }); return y; }
+  function totalH(){ return lanes.reduce((s,l)=>s+l.height,0); }
+  function absX(n){ return BAND + n.lx; }
+  function absY(n){ const l=laneById(n.laneId); return (l?l.top:0) + n.ly; }
+  function center(n){ return {x:absX(n)+n.w/2, y:absY(n)+n.h/2}; }
+  function laneAtY(y){
+    for(const l of lanes){ if(y>=l.top && y<l.top+l.height) return l; }
+    return lanes[lanes.length-1] || lanes[0];
+  }
+  function clampNode(n){
+    const l = laneById(n.laneId); if(!l) return;
+    n.lx = Math.max(2, Math.min(n.lx, canvasWidth - BAND - n.w - 2));
+    n.ly = Math.max(2, Math.min(n.ly, l.height - n.h - 2));
+  }
+
+  // ---------- mutators ----------
+  function addLane(name, height){
+    const lane = { id: nid(), name: name || ('Lane '+(lanes.length+1)), height: height || 160 };
+    lanes.push(lane);
+    return lane;
+  }
+  function removeLane(id){
+    if(lanes.length<=1) return;
+    const idx = lanes.findIndex(l=>l.id===id);
+    if(idx<0) return;
+    lanes.splice(idx,1);
+    nodes.filter(n=>n.laneId===id).forEach(n=>{ n.laneId = lanes[0].id; });
+    render();
+  }
+  function moveLane(id, dir){
+    const i = lanes.findIndex(l=>l.id===id), j=i+dir;
+    if(i<0 || j<0 || j>=lanes.length) return;
+    [lanes[i],lanes[j]] = [lanes[j],lanes[i]];
+    render();
+  }
+  function addNode(type, text, laneId, lx, ly, w, h){
+    const t = DEF[type] ? type : 'task';
+    const d = DEF[t];
+    if(!lanes.length) addLane();
+    const lane = (laneId && laneById(laneId)) || lanes[0];
+    const n = {
+      id: nid(), type: t,
+      text: text!=null ? text : defaultText(t),
+      laneId: lane.id,
+      lx: lx!=null ? lx : 40,
+      ly: ly!=null ? ly : Math.max(2,(lane.height - (h||d.h))/2),
+      w: w || d.w, h: h || d.h,
+    };
+    nodes.push(n);
+    return n;
+  }
+  function removeNode(id){
+    const i = nodes.findIndex(n=>n.id===id); if(i<0) return;
+    nodes.splice(i,1);
+    links = links.filter(l=> l.from!==id && l.to!==id);
+    if(selected && selected.kind==='node' && selected.id===id) selected=null;
+    render();
+  }
+  function addLink(from, to, fromSide, toSide){
+    if(from===to) return;
+    if(links.some(l=>l.from===from && l.to===to)) return;
+    links.push({id:nid(), from, to, fromSide, toSide});
+  }
+  function removeLink(id){
+    const i = links.findIndex(l=>l.id===id); if(i<0) return;
+    links.splice(i,1);
+    if(selected && selected.kind==='link' && selected.id===id) selected=null;
+    render();
+  }
+
+  // ---------- geometry ----------
+  function anchorPoint(n, side){
+    const x=absX(n), y=absY(n), c=center(n);
+    switch(side){
+      case 'n': return {x:c.x, y};
+      case 's': return {x:c.x, y:y+n.h};
+      case 'e': return {x:x+n.w, y:c.y};
+      case 'w': return {x, y:c.y};
+    }
+    return c;
+  }
+  function nearestSide(n, p){
+    const c=center(n), dx=p.x-c.x, dy=p.y-c.y;
+    if(Math.abs(dx) > Math.abs(dy)) return dx>0?'e':'w';
+    return dy>0?'s':'n';
+  }
+  function guessSide(from, to){
+    const dx=to.x-from.x, dy=to.y-from.y;
+    if(Math.abs(dx)>Math.abs(dy)) return dx>0?'w':'e';
+    return dy>0?'n':'s';
+  }
+  function extend(x,y,side,d){
+    if(side==='n') return {x, y:y-d};
+    if(side==='s') return {x, y:y+d};
+    if(side==='e') return {x:x+d, y};
+    if(side==='w') return {x:x-d, y};
+    return {x,y};
+  }
+  function routeBetween(p1, s1, p2){
+    if(s1==='e'||s1==='w'){ const mx=(p1.x+p2.x)/2; return [[mx,p1.y],[mx,p2.y]]; }
+    const my=(p1.y+p2.y)/2; return [[p1.x,my],[p2.x,my]];
+  }
+  function elbow(x1,y1,x2,y2,s1,s2){
+    const ext=18, p1=extend(x1,y1,s1,ext), p2=extend(x2,y2,s2,ext);
+    const mids=routeBetween(p1,s1,p2,s2);
+    const pts=[[x1,y1],[p1.x,p1.y],...mids,[p2.x,p2.y],[x2,y2]];
+    return 'M'+pts.map(p=>p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' L ');
+  }
+
+  function wrap(text, maxW, fs){
+    const charW = fs*0.56, maxChars = Math.max(4, Math.floor(maxW/charW));
+    const words = String(text).split(/\s+/), lines=[]; let cur='';
+    words.forEach(w=>{
+      if((cur+' '+w).trim().length > maxChars){ if(cur) lines.push(cur); cur=w; }
+      else cur=(cur+' '+w).trim();
+    });
+    if(cur) lines.push(cur);
+    return lines.length ? lines : [''];
+  }
+
+  // ---------- pointer → svg coordinates ----------
+  function toSvg(evt){
+    const pt = svg.createSVGPoint();
+    pt.x = evt.clientX; pt.y = evt.clientY;
+    const m = svg.getScreenCTM().inverse();
+    const r = pt.matrixTransform(m);
+    return {x:r.x, y:r.y};
+  }
+  function el(tag, attrs){
+    const e = document.createElementNS(NS, tag);
+    if(attrs) for(const k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  }
+
+  // ---------- render ----------
+  function render(){
+    computeTops();
+    const W = canvasWidth, H = Math.max(totalH(), 120);
+    svg.setAttribute('width', W);
+    svg.setAttribute('height', H);
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    while(svg.firstChild) svg.removeChild(svg.firstChild);
+
+    const defs = el('defs');
+    const mk = el('marker',{id:'ah',markerWidth:10,markerHeight:10,refX:7,refY:3.5,orient:'auto',markerUnits:'userSpaceOnUse'});
+    mk.appendChild(el('path',{d:'M0 0 L8 3.5 L0 7 z', fill:C.ink}));
+    defs.appendChild(mk);
+    svg.appendChild(defs);
+
+    lanes.forEach(drawLane);
+    links.forEach(drawLink);
+    nodes.forEach(drawNode);
+    if(nodes.length===0) drawTip();
+  }
+
+  function drawLane(l){
+    const g = el('g',{class:'lane'});
+    g.appendChild(el('rect',{x:0,y:l.top,width:canvasWidth,height:l.height,fill:'none',stroke:C.line}));
+    g.appendChild(el('rect',{x:0,y:l.top,width:BAND,height:l.height,fill:C.band,stroke:C.line}));
+    const cy = l.top + l.height/2;
+    const lbl = el('text',{x:16,y:cy,'text-anchor':'middle','dominant-baseline':'central','font-size':12,fill:C.inkSoft,'font-family':'var(--sans)',transform:`rotate(-90 16 ${cy})`});
+    lbl.textContent = l.name;
+    lbl.style.cursor = 'text';
+    lbl.addEventListener('dblclick', e=>{ e.stopPropagation(); editLane(l, lbl); });
+    g.appendChild(lbl);
+
+    // resize grip along bottom edge
+    const grip = el('rect',{x:0,y:l.top+l.height-3,width:canvasWidth,height:6,fill:'transparent'});
+    grip.style.cursor = 'ns-resize';
+    grip.addEventListener('mousedown', e=>startLaneResize(l, e));
+    g.appendChild(grip);
+
+    // lane controls (reorder / delete), revealed on hover
+    const ctl = el('g',{class:'lane-ctrl'});
+    const mkBtn = (cx, glyph, onClick, color)=>{
+      const bg = el('circle',{cx, cy:l.top+13, r:9, fill:'#fff', stroke:C.line});
+      const tx = el('text',{x:cx, y:l.top+13,'text-anchor':'middle','dominant-baseline':'central','font-size':11, fill: color||C.inkSoft});
+      tx.textContent = glyph;
+      const grp = el('g'); grp.style.cursor='pointer';
+      grp.appendChild(bg); grp.appendChild(tx);
+      grp.addEventListener('mousedown', e=>{ e.stopPropagation(); });
+      grp.addEventListener('click', e=>{ e.stopPropagation(); onClick(); });
+      return grp;
+    };
+    const rightX = canvasWidth; // controls sit near right edge of viewport-visible area
+    ctl.appendChild(mkBtn(BAND+18, '↑', ()=>moveLane(l.id,-1)));
+    ctl.appendChild(mkBtn(BAND+42, '↓', ()=>moveLane(l.id, 1)));
+    ctl.appendChild(mkBtn(BAND+66, '✕', ()=>removeLane(l.id), C.danger));
+    g.appendChild(ctl);
+
+    svg.appendChild(g);
+  }
+
+  function drawLink(l){
+    const a = nodeById(l.from), b = nodeById(l.to);
+    if(!a||!b) return;
+    const p1 = anchorPoint(a, l.fromSide), p2 = anchorPoint(b, l.toSide);
+    const d = elbow(p1.x,p1.y,p2.x,p2.y, l.fromSide, l.toSide);
+    const sel = selected && selected.kind==='link' && selected.id===l.id;
+
+    const hit = el('path',{d, fill:'none', stroke:'transparent','stroke-width':12});
+    hit.style.cursor='pointer'; hit.style.pointerEvents='stroke';
+    hit.addEventListener('mousedown', e=>{ e.stopPropagation(); selected={kind:'link',id:l.id}; render(); });
+    hit.addEventListener('dblclick', e=>{ e.stopPropagation(); removeLink(l.id); });
+    svg.appendChild(hit);
+
+    const path = el('path',{d, fill:'none', stroke: sel?C.accent:C.ink, 'stroke-width': sel?2:1.5, 'marker-end':'url(#ah)'});
+    path.style.pointerEvents='none';
+    svg.appendChild(path);
+  }
+
+  function drawNode(n){
+    const x=absX(n), y=absY(n), c=center(n);
+    const sel = selected && selected.kind==='node' && selected.id===n.id;
+    const g = el('g',{class:'node'});
+    g.dataset.id = n.id;
+
+    if(n.type==='task'){
+      g.appendChild(el('rect',{x,y,width:n.w,height:n.h,rx:8,fill:C.paper,stroke:C.ink,'stroke-width':1.5}));
+    } else if(n.type==='doc'){
+      const w=n.w,h=n.h;
+      const d=`M${x} ${y} h${w} v${h-10} q${-w/4} 11 ${-w/2} 0 q${-w/4} -11 ${-w/2} 0 z`;
+      g.appendChild(el('path',{d,fill:C.paper,stroke:C.ink,'stroke-width':1.5}));
+    } else if(n.type==='gateway'){
+      g.appendChild(el('polygon',{points:`${c.x},${y} ${x+n.w},${c.y} ${c.x},${y+n.h} ${x},${c.y}`,fill:C.paper,stroke:C.ink,'stroke-width':1.5}));
+    } else {
+      const r=n.w/2, sw=n.type==='event-end'?3:1.5;
+      g.appendChild(el('circle',{cx:c.x,cy:c.y,r,fill:C.paper,stroke:C.ink,'stroke-width':sw}));
+    }
+
+    // label (word-wrapped, vertically centred)
+    const fs = n.type.startsWith('event') ? Math.max(10, fontSize-1) : fontSize;
+    const lines = wrap(n.text, n.w-10, fs);
+    const lh = fs+2, startY = c.y - (lines.length-1)*lh/2;
+    const t = el('text',{x:c.x,'text-anchor':'middle','dominant-baseline':'central','font-size':fs,fill:C.ink,'font-family':'var(--sans)'});
+    t.style.pointerEvents='none';
+    lines.forEach((ln,i)=>{ const ts=el('tspan',{x:c.x,y:startY+i*lh}); ts.textContent=ln; t.appendChild(ts); });
+    g.appendChild(t);
+
+    if(sel){
+      // selection outline
+      if(n.type==='task'||n.type==='doc'){
+        g.appendChild(el('rect',{x:x-3,y:y-3,width:n.w+6,height:n.h+6,rx:6,fill:'none',stroke:C.accent,'stroke-width':2}));
+      } else {
+        g.appendChild(el('circle',{cx:c.x,cy:c.y,r:n.w/2+4,fill:'none',stroke:C.accent,'stroke-width':2}));
+      }
+      // connect anchors
+      ['n','s','e','w'].forEach(side=>{
+        const ap = anchorPoint(n, side);
+        const dot = el('circle',{cx:ap.x,cy:ap.y,r:5,fill:C.accent,stroke:'#fff','stroke-width':1.5});
+        dot.style.cursor='crosshair';
+        dot.addEventListener('mousedown', e=>startLink(n, side, e));
+        g.appendChild(dot);
+      });
+      // resize handle (bottom-right)
+      const rh = el('rect',{x:x+n.w-5,y:y+n.h-5,width:10,height:10,fill:C.accent});
+      rh.style.cursor='nwse-resize';
+      rh.addEventListener('mousedown', e=>startResize(n, e));
+      g.appendChild(rh);
+      // delete badge (top-right)
+      const del = el('g'); del.style.cursor='pointer';
+      del.appendChild(el('circle',{cx:x+n.w,cy:y,r:8,fill:C.danger}));
+      const dx = el('text',{x:x+n.w,y:y,'text-anchor':'middle','dominant-baseline':'central','font-size':11,fill:'#fff'});
+      dx.textContent='×'; del.appendChild(dx);
+      del.addEventListener('mousedown', e=>e.stopPropagation());
+      del.addEventListener('click', e=>{ e.stopPropagation(); removeNode(n.id); });
+      g.appendChild(del);
+    }
+
+    g.addEventListener('mousedown', e=>startDrag(n, e, g));
+    g.addEventListener('dblclick', e=>{ e.stopPropagation(); editNode(n, g); });
+    svg.appendChild(g);
+  }
+
+  function drawTip(){
+    const t = el('text',{x:canvasWidth/2,y:140,'text-anchor':'middle','font-size':14,fill:C.inkSoft,'font-family':'var(--sans)'});
+    t.textContent = 'Add a lane and drop shapes from the toolbar above.';
+    t.style.pointerEvents='none';
+    svg.appendChild(t);
+  }
+
+  // ---------- interactions ----------
+  function startDrag(n, e, g){
+    if(e.button!==0) return;
+    selected = {kind:'node', id:n.id};
+    e.preventDefault();
+    computeTops();
+    const s = toSvg(e), ox = absX(n)-s.x, oy = absY(n)-s.y;
+    let moved=false;
+    const mm = ev=>{
+      moved=true;
+      const p = toSvg(ev);
+      const nx = p.x + ox, ny = p.y + oy;
+      const lane = laneAtY(ny + n.h/2);
+      n.laneId = lane.id;
+      n.lx = nx - BAND;
+      n.ly = ny - lane.top;
+      clampNode(n);
+      render();
+    };
+    const mu = ()=>{ document.removeEventListener('mousemove',mm); document.removeEventListener('mouseup',mu); if(!moved) render(); };
+    document.addEventListener('mousemove',mm); document.addEventListener('mouseup',mu);
+    render();
+  }
+
+  function startResize(n, e){
+    e.preventDefault(); e.stopPropagation();
+    const sq = SQUARE(n.type);
+    const mm = ev=>{
+      const p = toSvg(ev);
+      let nw = Math.max(40, p.x - absX(n));
+      let nh = Math.max(28, p.y - absY(n));
+      if(sq){ const m=Math.max(nw,nh); nw=m; nh=m; }
+      n.w=nw; n.h=nh;
+      clampNode(n);
+      render();
+    };
+    const mu = ()=>{ document.removeEventListener('mousemove',mm); document.removeEventListener('mouseup',mu); };
+    document.addEventListener('mousemove',mm); document.addEventListener('mouseup',mu);
+  }
+
+  function startLink(fromNode, side, e){
+    e.preventDefault(); e.stopPropagation();
+    const a = anchorPoint(fromNode, side);
+    const preview = el('path',{fill:'none',stroke:C.accent,'stroke-width':1.5,'stroke-dasharray':'4 4'});
+    svg.appendChild(preview);
+    const mm = ev=>{
+      const p = toSvg(ev);
+      preview.setAttribute('d', elbow(a.x,a.y,p.x,p.y, side, guessSide(a,p)));
+    };
+    const mu = ev=>{
+      document.removeEventListener('mousemove',mm); document.removeEventListener('mouseup',mu);
+      if(preview.parentNode) preview.parentNode.removeChild(preview);
+      const p = toSvg(ev);
+      const target = nodes.find(m => m.id!==fromNode.id &&
+        p.x>=absX(m) && p.x<=absX(m)+m.w && p.y>=absY(m) && p.y<=absY(m)+m.h);
+      if(target) addLink(fromNode.id, target.id, side, nearestSide(target, p));
+      render();
+    };
+    document.addEventListener('mousemove',mm); document.addEventListener('mouseup',mu);
+  }
+
+  // ---------- in-place rename ----------
+  function placeEditor(targetEl){
+    const r = targetEl.getBoundingClientRect();
+    const sr = stage.getBoundingClientRect();
+    const inp = document.createElement('input');
+    inp.className = 'editbox';
+    inp.style.left   = (r.left - sr.left + stage.scrollLeft) + 'px';
+    inp.style.top    = (r.top  - sr.top  + stage.scrollTop) + 'px';
+    inp.style.width  = Math.max(60, r.width) + 'px';
+    inp.style.height = Math.max(22, r.height) + 'px';
+    stage.appendChild(inp);
+    return inp;
+  }
+  function editNode(n, g){
+    const shape = g.querySelector('rect, polygon, circle, path');
+    const inp = placeEditor(shape || g);
+    inp.value = n.text;
+    inp.focus(); inp.select();
+    const commit = ()=>{ n.text = inp.value.trim() || defaultText(n.type); inp.remove(); render(); };
+    inp.addEventListener('keydown', ev=>{ if(ev.key==='Enter'){ev.preventDefault();commit();} else if(ev.key==='Escape'){inp.remove();} });
+    inp.addEventListener('blur', commit, {once:true});
+  }
+  function editLane(l, lblEl){
+    const inp = placeEditor(lblEl);
+    inp.style.width = '160px'; inp.style.height = '26px';
+    inp.value = l.name;
+    inp.focus(); inp.select();
+    const commit = ()=>{ l.name = inp.value.trim() || 'Lane'; inp.remove(); render(); };
+    inp.addEventListener('keydown', ev=>{ if(ev.key==='Enter'){ev.preventDefault();commit();} else if(ev.key==='Escape'){inp.remove();} });
+    inp.addEventListener('blur', commit, {once:true});
+  }
+
+  function startLaneResize(l, e){
+    e.preventDefault(); e.stopPropagation();
+    computeTops();
+    const startY = e.clientY, startH = l.height;
+    const mm = ev=>{ l.height = Math.max(LANE_MIN, startH + (ev.clientY-startY)); render(); };
+    const mu = ()=>{ document.removeEventListener('mousemove',mm); document.removeEventListener('mouseup',mu); };
+    document.addEventListener('mousemove',mm); document.addEventListener('mouseup',mu);
+  }
+
+  // ---------- global listeners ----------
+  svg.addEventListener('mousedown', e=>{ if(e.target===svg){ selected=null; render(); } });
+  document.addEventListener('keydown', e=>{
+    if((e.key==='Delete'||e.key==='Backspace') && selected){
+      const a = document.activeElement;
+      if(a && (a.tagName==='INPUT' || a.isContentEditable)) return;
+      if(selected.kind==='node') removeNode(selected.id);
+      else if(selected.kind==='link') removeLink(selected.id);
+      e.preventDefault();
+    }
+  });
+
+  document.querySelectorAll('button.tool').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      if(!lanes.length) addLane();
+      const li = Math.floor(lanes.length/2), lane = lanes[li], d = DEF[b.dataset.add];
+      const offset = (nodes.length%6)*22;
+      const n = addNode(b.dataset.add, null, lane.id, 60+offset, Math.max(2,(lane.height-d.h)/2));
+      selected = {kind:'node', id:n.id};
+      render();
+    });
+  });
+  document.getElementById('addLane').addEventListener('click', ()=>{ addLane(); render(); });
+  document.getElementById('clearAll').addEventListener('click', ()=>{
+    if(!confirm('Clear the whole diagram?')) return;
+    nodes=[]; links=[]; lanes=[]; selected=null; uid=1;
+    currentId=null; currentToken=null;
+    history.replaceState(null,'',location.pathname);
+    addLane('Lane 1'); render();
+  });
+  fontInput.addEventListener('input', ()=>{
+    const v = parseInt(fontInput.value,10);
+    if(!isNaN(v)) { fontSize = Math.max(8, Math.min(60, v)); render(); }
+  });
+
+  // ---------- export ----------
+  document.getElementById('exportSvg').addEventListener('click', openExport);
+  function openExport(){
+    const back = document.createElement('div'); back.className='modal-backdrop';
+    back.innerHTML = `<div class="modal">
+        <h3>Export SVG</h3>
+        <div class="row"><span>Scale</span><input id="exScale" type="range" min="0.5" max="3" step="0.5" value="1"><span id="exScaleV" style="min-width:34px;text-align:right">1×</span></div>
+        <div class="row"><span>Font override</span><input id="exFont" type="number" min="8" max="60" placeholder="${fontSize}"></div>
+        <div class="actions"><button class="act" id="exCancel">Cancel</button><button class="act primary" id="exGo">Download .svg</button></div>
+      </div>`;
+    document.body.appendChild(back);
+    const sc = back.querySelector('#exScale'), scv = back.querySelector('#exScaleV');
+    sc.addEventListener('input', ()=> scv.textContent = sc.value+'×');
+    back.addEventListener('mousedown', e=>{ if(e.target===back) back.remove(); });
+    back.querySelector('#exCancel').addEventListener('click', ()=>back.remove());
+    back.querySelector('#exGo').addEventListener('click', ()=>{
+      const fo = parseInt(back.querySelector('#exFont').value,10);
+      const out = buildSvg(parseFloat(sc.value)||1, isNaN(fo)?0:fo);
+      download('swimlane-diagram.svg', out);
+      back.remove();
+    });
+  }
+  function buildSvg(scale, fontOverride){
+    computeTops();
+    const W = canvasWidth, H = totalH()+20;
+    const baseFs = fontOverride || fontSize;
+    let svgStr = `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(W*scale)}" height="${Math.round(H*scale)}" viewBox="0 0 ${W} ${H}" font-family="Arial, sans-serif">`;
+    svgStr += `<defs><marker id="ah" markerWidth="10" markerHeight="10" refX="7" refY="3.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0 L8 3.5 L0 7 z" fill="${C.ink}"/></marker></defs>`;
+    svgStr += `<rect width="${W}" height="${H}" fill="${C.paper}"/>`;
+    lanes.forEach(l=>{
+      svgStr += `<rect x="0" y="${l.top}" width="${W}" height="${l.height}" fill="none" stroke="${C.line}"/>`;
+      svgStr += `<rect x="0" y="${l.top}" width="${BAND}" height="${l.height}" fill="${C.band}" stroke="${C.line}"/>`;
+      const cy = l.top + l.height/2;
+      svgStr += `<text x="16" y="${cy}" transform="rotate(-90 16 ${cy})" text-anchor="middle" dominant-baseline="central" font-size="12" fill="${C.inkSoft}">${escapeXml(l.name)}</text>`;
+    });
+    links.forEach(l=>{
+      const a=nodeById(l.from), b=nodeById(l.to); if(!a||!b) return;
+      const p1=anchorPoint(a,l.fromSide), p2=anchorPoint(b,l.toSide);
+      svgStr += `<path d="${elbow(p1.x,p1.y,p2.x,p2.y,l.fromSide,l.toSide)}" fill="none" stroke="${C.ink}" stroke-width="1.5" marker-end="url(#ah)"/>`;
+    });
+    nodes.forEach(n=>{
+      const x=absX(n), y=absY(n), c=center(n);
+      if(n.type==='task'){
+        svgStr += `<rect x="${x}" y="${y}" width="${n.w}" height="${n.h}" rx="8" fill="${C.paper}" stroke="${C.ink}" stroke-width="1.5"/>`;
+      } else if(n.type==='doc'){
+        svgStr += `<path d="M${x} ${y} h${n.w} v${n.h-10} q${-n.w/4} 11 ${-n.w/2} 0 q${-n.w/4} -11 ${-n.w/2} 0 z" fill="${C.paper}" stroke="${C.ink}" stroke-width="1.5"/>`;
+      } else if(n.type==='gateway'){
+        svgStr += `<polygon points="${c.x},${y} ${x+n.w},${c.y} ${c.x},${y+n.h} ${x},${c.y}" fill="${C.paper}" stroke="${C.ink}" stroke-width="1.5"/>`;
+      } else {
+        const r=n.w/2, sw=n.type==='event-end'?3:1.5;
+        svgStr += `<circle cx="${c.x}" cy="${c.y}" r="${r}" fill="${C.paper}" stroke="${C.ink}" stroke-width="${sw}"/>`;
+      }
+      const fs = n.type.startsWith('event') ? Math.max(10, baseFs-1) : baseFs;
+      const lines = wrap(n.text, n.w-10, fs), lh=fs+2, startY=c.y-(lines.length-1)*lh/2;
+      lines.forEach((ln,i)=>{
+        svgStr += `<text x="${c.x}" y="${startY+i*lh}" text-anchor="middle" dominant-baseline="central" font-size="${fs}" fill="${C.ink}">${escapeXml(ln)}</text>`;
+      });
+    });
+    return svgStr + `</svg>`;
+  }
+  function download(name, text){
+    const blob = new Blob([text], {type:'image/svg+xml'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href=url; a.download=name; a.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }
+  function escapeXml(s){ return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c])); }
+
+  // ---------- persistence ----------
+  function setStatus(msg, kind){
+    statusEl.textContent = msg || '';
+    statusEl.className = 'status' + (kind ? ' '+kind : '');
+    if(msg) setTimeout(()=>{ if(statusEl.textContent===msg){ statusEl.textContent=''; statusEl.className='status'; } }, 4000);
+  }
+  function serialize(){
+    return {
+      v: 2,
+      canvasWidth,
+      fontSize,
+      lanes: lanes.map(l=>({id:l.id, name:l.name, height:l.height})),
+      nodes: nodes.map(n=>({id:n.id, type:n.type, text:n.text, laneId:n.laneId, lx:n.lx, ly:n.ly, w:n.w, h:n.h})),
+      links: links.map(l=>({id:l.id, from:l.from, to:l.to, fromSide:l.fromSide, toSide:l.toSide})),
+    };
+  }
+  function deserialize(data){
+    nodes=[]; links=[]; lanes=[]; selected=null; uid=1;
+    fontSize = (typeof data.fontSize==='number') ? data.fontSize : 13;
+    fontInput.value = fontSize;
+    canvasWidth = data.canvasWidth || 1400;
+    const idmap = {};
+    (data.lanes||[]).forEach(l=>{ const lane=addLane(l.name, l.height); idmap[l.id]=lane.id; });
+    if(!lanes.length) addLane('Lane 1');
+    (data.nodes||[]).forEach(n=>{
+      const laneId = idmap[n.laneId] || lanes[0].id;
+      const node = addNode(n.type, n.text, laneId, n.lx, n.ly, n.w, n.h);  // w/h undefined -> DEF defaults (v1 migration)
+      idmap[n.id] = node.id;
+    });
+    (data.links||[]).forEach(l=>{
+      const from=idmap[l.from], to=idmap[l.to];
+      if(from && to) addLink(from, to, l.fromSide||'e', l.toSide||'w');
+    });
+    render();
+  }
+
+  async function postDiagram(includeOwner){
+    const body = { diagram: serialize() };
+    if(includeOwner && currentId && currentToken){ body.id = currentId; body.token = currentToken; }
+    const res = await fetch('/api/diagrams', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body),
+    });
+    return res;
+  }
+  async function save(){
+    setStatus('Saving…');
+    try{
+      let res = await postDiagram(true);
+      // owner overwrite rejected (lost token / legacy / unknown) -> save as new copy
+      if((res.status===403 || res.status===404 || res.status===409) && currentId){
+        currentId=null; currentToken=null;
+        res = await postDiagram(false);
+      }
+      if(!res.ok) throw new Error('HTTP '+res.status);
+      const out = await res.json();
+      currentId = out.id;
+      if(out.token){ currentToken = out.token; try{ localStorage.setItem('swim:token:'+out.id, out.token); }catch(_){} }
+      history.replaceState(null,'', '?id='+encodeURIComponent(out.id));
+      setStatus('Saved', 'ok');
+    }catch(err){ setStatus('Save failed', 'err'); console.error(err); }
+  }
+  async function load(id){
+    setStatus('Loading…');
+    try{
+      const res = await fetch('/api/diagrams/'+encodeURIComponent(id));
+      if(!res.ok) throw new Error('HTTP '+res.status);
+      const out = await res.json();
+      currentId = id;
+      try{ currentToken = localStorage.getItem('swim:token:'+id); }catch(_){ currentToken=null; }
+      deserialize(out.diagram || {});
+      setStatus(currentToken ? 'Loaded' : 'Loaded (view only — saving makes your own copy)', 'ok');
+      return true;
+    }catch(err){ setStatus('Could not load diagram', 'err'); console.error(err); return false; }
+  }
+  async function share(){
+    if(!currentId) await save();
+    if(!currentId) return;
+    const url = location.origin + '/?id=' + encodeURIComponent(currentId);
+    try{ await navigator.clipboard.writeText(url); setStatus('Link copied', 'ok'); }
+    catch(_){ prompt('Share this link:', url); }
+  }
+
+  document.getElementById('saveBtn').addEventListener('click', save);
+  document.getElementById('shareBtn').addEventListener('click', share);
+  document.addEventListener('keydown', e=>{
+    if((e.metaKey||e.ctrlKey) && e.key==='s'){ e.preventDefault(); save(); }
+  });
+
+  // ---------- init ----------
+  (async function init(){
+    const id = new URLSearchParams(location.search).get('id');
+    if(id && /^[a-z0-9]{6,24}$/i.test(id)){
+      const ok = await load(id);
+      if(ok) return;
+    }
+    addLane('Customer', 180);
+    addLane('Internal', 180);
+    render();
+  })();
+})();
+</script>
+</body>
+</html>
