@@ -1,8 +1,8 @@
 {
-  "name": "swimlane-editor",
+  "name": "amista-charts",
   "version": "1.0.0",
   "private": true,
-  "description": "Interactive swimlane process diagram editor with saved/shareable diagrams, on Cloudflare Workers.",
+  "description": "Amista Charts — interactive swimlane process diagram editor with saved/shareable diagrams, on Cloudflare Workers.",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",

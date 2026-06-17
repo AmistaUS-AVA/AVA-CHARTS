@@ -1,6 +1,8 @@
-# Swimlane Process Editor
+# Amista Charts
 
-An interactive, BPMN-flavored **swimlane process diagram editor** that runs on Cloudflare Workers. Lay out horizontal lanes per actor, generate a draft from a plain-language description, drag boxes across lanes, connect them with auto-routing arrows, rename everything, then **save** and **share by link**. Export any diagram to a standalone SVG.
+An interactive, BPMN-flavored **swimlane process diagram editor** that runs on Cloudflare Workers. Lay out horizontal lanes per actor, drop boxes (start/task/gateway/document/end), drag and resize them across lanes, connect them with auto-routing arrows, rename everything, set one global font size, then **save** and **share by link**. Export any diagram to a standalone SVG (with scale + font overrides).
+
+The editor is **SVG-native**: a single `<svg>` is both the canvas and the export source. Saved diagrams are owner-token protected — anyone with a link can view, but only the creator can overwrite. Live at **https://charts.amista-consulting.com**.
 
 No front-end framework, no build step: the whole editor is one `public/index.html`. A small Worker (`worker/index.js`) provides a two-endpoint JSON API backed by KV for persistence.
 
