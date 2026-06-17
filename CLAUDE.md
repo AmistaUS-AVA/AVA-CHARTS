@@ -41,20 +41,23 @@ IDs are short random strings from a no-ambiguous-characters alphabet (`makeId` i
 
 ## The diagram data model (front end ↔ Worker)
 
-`serialize()` in `index.html` is the source of truth for the saved shape. Current `v: 2`:
+`serialize()` in `index.html` is the source of truth for the saved shape. Current `v: 3`:
 
 ```js
 {
-  v: 2,
+  v: 3,
   canvasWidth: Number,
-  fontSize: Number,                                    // global font size for all labels
-  lanes: [{ id, name, height }],
-  nodes: [{ id, type, text, laneId, lx, ly, w, h }],   // lx/ly lane-local; w/h per-node (resizable)
-  links: [{ id, from, to, fromSide, toSide }]          // sides are 'n'|'s'|'e'|'w'
+  fontSize: Number,                                          // global font size for all labels
+  lanes: [{ id, name, height }],                             // horizontal rows
+  cols:  [{ id, name, width }],                              // vertical columns (visual phase bands)
+  nodes: [{ id, type, text, laneId, lx, ly, w, h, fill }],   // lx/ly lane-local; w/h resizable; fill = palette key|null
+  links: [{ id, from, to, fromSide, toSide, dashed }]        // sides 'n'|'s'|'e'|'w'; dashed = boolean
 }
 ```
 
-`deserialize(data)` rebuilds the editor from this. It **remaps ids** on load (old id → freshly minted id) so re-saving never collides, and **migrates v1**: missing `fontSize` → 13, missing node `w`/`h` → the type's `DEF` geometry, unknown `type` → `task`. If you add fields to a node/lane/link, update **both** `serialize` and `deserialize`, and bump `v`. When loading an older `v`, migrate rather than assuming current shape.
+`deserialize(data)` rebuilds the editor from this. It **remaps ids** on load (old id → freshly minted id) so re-saving never collides, and **migrates v1/v2**: missing `fontSize` → 13, missing node `w`/`h` → the type's `DEF` geometry, unknown `type` → `task`, missing `cols` → `[]`, missing `fill` → null (white), missing `dashed` → false. If you add fields to a node/lane/link/col, update **both** `serialize` and `deserialize`, and bump `v`. When loading an older `v`, migrate rather than assuming current shape.
+
+**Layout note:** rows own a node's vertical position (lane membership by the node's vertical centre via `laneAtY`). Columns are *visual organisers* only — a top band of labels + vertical dividers + resizable widths; they don't own nodes. When `cols` is non-empty the whole grid shifts down by the top band (`topB()`). Box fills come from the `PALETTE` map (`fillOf(n)`); the contextual toolbar shows colour swatches for a selected box or a dashed toggle for a selected arrow.
 
 Node `type` is one of: `task`, `gateway`, `doc`, `event-start`, `event-end`. Geometry per type lives in the `DEF` object in `index.html` — change sizes there, not inline.
 

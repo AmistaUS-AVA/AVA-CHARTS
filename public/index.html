@@ -76,6 +76,19 @@
   .status.ok { color: #15803d; }
   .status.err { color: var(--danger); }
 
+  /* contextual toolbar (box colours / line style for the current selection) */
+  .ctxbar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 6px 12px;
+    background: var(--paper);
+    border-bottom: 1px solid var(--line-soft);
+    flex-wrap: wrap;
+    font-size: 12px; color: var(--ink-soft);
+  }
+  .ctxbar .swatches { display: inline-flex; gap: 5px; }
+  .ctxbar .swatch { width: 20px; height: 20px; border-radius: 5px; border: 2px solid var(--line); cursor: pointer; padding: 0; }
+  .ctxbar .swatch.on { outline: 2px solid var(--accent); outline-offset: 1px; }
+
   .stage {
     flex: 1;
     overflow: auto;
@@ -93,12 +106,13 @@
   }
   svg#canvas { display: block; }
   svg#canvas .lane-ctrl { opacity: 0; transition: opacity .1s; }
-  svg#canvas g.lane:hover .lane-ctrl { opacity: 1; }
+  svg#canvas g.lane:hover .lane-ctrl,
+  svg#canvas g.col:hover .lane-ctrl { opacity: 1; }
   svg#canvas g.node { cursor: grab; }
   svg#canvas g.node.dragging { cursor: grabbing; }
   svg#canvas text { user-select: none; -webkit-user-select: none; }
 
-  /* in-place rename input overlay */
+  /* in-place rename / size input overlay */
   .editbox {
     position: absolute;
     z-index: 80;
@@ -156,7 +170,8 @@
       </button>
     </div>
     <span class="sep"></span>
-    <button class="act" id="addLane">+ Lane</button>
+    <button class="act" id="addLane" title="Add a horizontal lane (row)">+ Lane</button>
+    <button class="act" id="addCol" title="Add a vertical lane (column)">+ Column</button>
     <button class="act" id="snapBtn" title="Snap shapes to the grid (hold Alt to bypass)">Snap</button>
     <span class="sep"></span>
     <label class="fontctl" title="Font size for all labels">Font
@@ -170,7 +185,13 @@
     <button class="act" id="clearAll">Clear</button>
     <button class="act danger" id="deleteBtn" title="Permanently delete the saved diagram">Delete</button>
     <span class="status" id="status"></span>
-    <span class="hint">Drag boxes (across lanes too) · select then drag the corner to resize or a dot to connect · double-click to rename</span>
+    <span class="hint">Drag boxes across lanes · drag a dot to connect · double-click to rename · hover a lane for its controls</span>
+  </div>
+
+  <div class="ctxbar" id="ctxbar" style="display:none">
+    <span id="ctxColorLabel">Box colour</span>
+    <span class="swatches" id="swatches"></span>
+    <button class="act" id="dashBtn" title="Toggle dashed line for the selected arrow">Dashed line</button>
   </div>
 
   <div class="stage" id="stage">
@@ -189,9 +210,22 @@
   const C = { ink:'#3f3f46', inkSoft:'#6b7280', line:'#c8c8c2', band:'#f0efe9',
               paper:'#ffffff', accent:'#2563eb', danger:'#b42318' };
 
-  let lanes = [];   // {id, name, height, top?}
-  let nodes = [];   // {id, type, text, laneId, lx, ly, w, h}
-  let links = [];   // {id, from, to, fromSide, toSide}
+  // box fill presets (key -> fill + matching border). null/'default' = white.
+  const PALETTE = {
+    default: { name:'White',  fill:'#ffffff', stroke:'#3f3f46' },
+    gray:    { name:'Gray',   fill:'#ecebe4', stroke:'#6b7280' },
+    blue:    { name:'Blue',   fill:'#dbeafe', stroke:'#2563eb' },
+    green:   { name:'Green',  fill:'#dcfce7', stroke:'#15803d' },
+    amber:   { name:'Amber',  fill:'#fef3c7', stroke:'#b45309' },
+    red:     { name:'Red',    fill:'#fde2e1', stroke:'#b42318' },
+    purple:  { name:'Purple', fill:'#ede9fe', stroke:'#6d28d9' },
+  };
+  const fillOf = n => PALETTE[(n && n.fill) || 'default'] || PALETTE.default;
+
+  let lanes = [];   // {id, name, height, top?}   horizontal rows
+  let cols  = [];   // {id, name, width, left?}   vertical columns (visual phase bands)
+  let nodes = [];   // {id, type, text, laneId, lx, ly, w, h, fill}
+  let links = [];   // {id, from, to, fromSide, toSide, dashed}
   let fontSize = 13;
   let snap = true;                // snap-to-grid (editor preference, not saved in diagram)
   try{ const s = localStorage.getItem('swim:snap'); if(s!==null) snap = (s === '1'); }catch(_){}
@@ -200,9 +234,11 @@
   let uid = 1;
   const nid = () => 'id'+(uid++);
 
-  const BAND = 34;
-  const GRID = 20;   // snap-to-grid step (matches the stage background grid)
-  const LANE_MIN = 90;
+  const BAND = 34;        // left band (row labels)
+  const TOPB_H = 26;      // top band height (column labels), only when columns exist
+  const GRID = 20;        // snap-to-grid step (matches the stage background grid)
+  const LANE_MIN = 90;    // min row height
+  const COL_MIN = 80;     // min column width
   let canvasWidth = 1400;
 
   const DEF = {
@@ -221,12 +257,20 @@
   // ---------- state helpers ----------
   function laneById(id){ return lanes.find(l=>l.id===id); }
   function nodeById(id){ return nodes.find(n=>n.id===id); }
-  function computeTops(){ let y=0; lanes.forEach(l=>{ l.top=y; y+=l.height; }); return y; }
-  function totalH(){ return lanes.reduce((s,l)=>s+l.height,0); }
+  function linkById(id){ return links.find(l=>l.id===id); }
+  function topB(){ return cols.length ? TOPB_H : 0; }
+  function computeTops(){ let y=topB(); lanes.forEach(l=>{ l.top=y; y+=l.height; }); return y; }
+  function computeLefts(){
+    let x=BAND; cols.forEach(c=>{ c.left=x; x+=c.width; });
+    if(cols.length && x>canvasWidth) canvasWidth = x;   // grow to fit columns
+    return x;
+  }
+  function totalH(){ return topB() + lanes.reduce((s,l)=>s+l.height,0); }
   function absX(n){ return BAND + n.lx; }
   function absY(n){ const l=laneById(n.laneId); return (l?l.top:0) + n.ly; }
   function center(n){ return {x:absX(n)+n.w/2, y:absY(n)+n.h/2}; }
   function laneAtY(y){
+    if(lanes.length && y < lanes[0].top) return lanes[0];
     for(const l of lanes){ if(y>=l.top && y<l.top+l.height) return l; }
     return lanes[lanes.length-1] || lanes[0];
   }
@@ -257,7 +301,24 @@
     [lanes[i],lanes[j]] = [lanes[j],lanes[i]];
     render();
   }
-  function addNode(type, text, laneId, lx, ly, w, h){
+  function addCol(name, width){
+    const c = { id: nid(), name: name || ('Phase '+(cols.length+1)), width: width || 240 };
+    cols.push(c);
+    return c;
+  }
+  function removeCol(id){
+    const i = cols.findIndex(c=>c.id===id);
+    if(i<0) return;
+    cols.splice(i,1);
+    render();
+  }
+  function moveCol(id, dir){
+    const i = cols.findIndex(c=>c.id===id), j=i+dir;
+    if(i<0 || j<0 || j>=cols.length) return;
+    [cols[i],cols[j]] = [cols[j],cols[i]];
+    render();
+  }
+  function addNode(type, text, laneId, lx, ly, w, h, fill){
     const t = DEF[type] ? type : 'task';
     const d = DEF[t];
     if(!lanes.length) addLane();
@@ -269,6 +330,7 @@
       lx: lx!=null ? lx : 40,
       ly: ly!=null ? ly : Math.max(2,(lane.height - (h||d.h))/2),
       w: w || d.w, h: h || d.h,
+      fill: fill || null,
     };
     nodes.push(n);
     return n;
@@ -280,10 +342,10 @@
     if(selected && selected.kind==='node' && selected.id===id) selected=null;
     render();
   }
-  function addLink(from, to, fromSide, toSide){
+  function addLink(from, to, fromSide, toSide, dashed){
     if(from===to) return;
     if(links.some(l=>l.from===from && l.to===to)) return;
-    links.push({id:nid(), from, to, fromSide, toSide});
+    links.push({id:nid(), from, to, fromSide, toSide, dashed: !!dashed});
   }
   function removeLink(id){
     const i = links.findIndex(l=>l.id===id); if(i<0) return;
@@ -358,6 +420,7 @@
 
   // ---------- render ----------
   function render(){
+    computeLefts();
     computeTops();
     const W = canvasWidth, H = Math.max(totalH(), 120);
     svg.setAttribute('width', W);
@@ -372,9 +435,14 @@
     svg.appendChild(defs);
 
     lanes.forEach(drawLane);
+    if(topB()){ // corner where the two bands meet
+      svg.appendChild(el('rect',{x:0,y:0,width:BAND,height:topB(),fill:C.band,stroke:C.line}));
+    }
+    cols.forEach(drawCol);
     links.forEach(drawLink);
     nodes.forEach(drawNode);
-    if(nodes.length===0) drawTip();
+    if(nodes.length===0 && cols.length===0) drawTip();
+    updateCtxBar();
   }
 
   function drawLane(l){
@@ -385,7 +453,7 @@
     const lbl = el('text',{x:16,y:cy,'text-anchor':'middle','dominant-baseline':'central','font-size':12,fill:C.inkSoft,'font-family':'var(--sans)',transform:`rotate(-90 16 ${cy})`});
     lbl.textContent = l.name;
     lbl.style.cursor = 'text';
-    lbl.addEventListener('dblclick', e=>{ e.stopPropagation(); editLane(l, lbl); });
+    lbl.addEventListener('dblclick', e=>{ e.stopPropagation(); editName(l, lbl); });
     g.appendChild(lbl);
 
     // resize grip along bottom edge
@@ -394,7 +462,7 @@
     grip.addEventListener('mousedown', e=>startLaneResize(l, e));
     g.appendChild(grip);
 
-    // lane controls (reorder / delete), revealed on hover
+    // lane controls (reorder / size / delete), revealed on hover
     const ctl = el('g',{class:'lane-ctrl'});
     const mkBtn = (cx, glyph, onClick, color)=>{
       const bg = el('circle',{cx, cy:l.top+13, r:9, fill:'#fff', stroke:C.line});
@@ -406,12 +474,49 @@
       grp.addEventListener('click', e=>{ e.stopPropagation(); onClick(); });
       return grp;
     };
-    const rightX = canvasWidth; // controls sit near right edge of viewport-visible area
     ctl.appendChild(mkBtn(BAND+18, '↑', ()=>moveLane(l.id,-1)));
     ctl.appendChild(mkBtn(BAND+42, '↓', ()=>moveLane(l.id, 1)));
-    ctl.appendChild(mkBtn(BAND+66, '✕', ()=>removeLane(l.id), C.danger));
+    ctl.appendChild(mkBtn(BAND+66, '⤢', ()=>editSize(l,'height',lbl)));
+    ctl.appendChild(mkBtn(BAND+90, '✕', ()=>removeLane(l.id), C.danger));
     g.appendChild(ctl);
 
+    svg.appendChild(g);
+  }
+
+  function drawCol(c){
+    const tb = topB(), H = totalH();
+    const g = el('g',{class:'col'});
+    // top label cell
+    g.appendChild(el('rect',{x:c.left,y:0,width:c.width,height:tb,fill:C.band,stroke:C.line}));
+    const lbl = el('text',{x:c.left+c.width/2,y:tb/2,'text-anchor':'middle','dominant-baseline':'central','font-size':12,fill:C.inkSoft,'font-family':'var(--sans)'});
+    lbl.textContent = c.name; lbl.style.cursor='text';
+    lbl.addEventListener('dblclick', e=>{ e.stopPropagation(); editName(c, lbl); });
+    g.appendChild(lbl);
+    // vertical dividers (left + right edges), spanning the rows
+    g.appendChild(el('line',{x1:c.left, y1:tb, x2:c.left, y2:H, stroke:C.line}));
+    g.appendChild(el('line',{x1:c.left+c.width, y1:tb, x2:c.left+c.width, y2:H, stroke:C.line}));
+    // resize grip on the right edge
+    const grip = el('rect',{x:c.left+c.width-3,y:0,width:6,height:H,fill:'transparent'});
+    grip.style.cursor='ew-resize';
+    grip.addEventListener('mousedown', e=>startColResize(c, e));
+    g.appendChild(grip);
+    // controls on hover, inside the top label cell
+    const ctl = el('g',{class:'lane-ctrl'});
+    const mkBtn = (cx, glyph, onClick, color)=>{
+      const bg = el('circle',{cx, cy:tb/2, r:8, fill:'#fff', stroke:C.line});
+      const tx = el('text',{x:cx, y:tb/2,'text-anchor':'middle','dominant-baseline':'central','font-size':10, fill: color||C.inkSoft});
+      tx.textContent = glyph;
+      const grp = el('g'); grp.style.cursor='pointer';
+      grp.appendChild(bg); grp.appendChild(tx);
+      grp.addEventListener('mousedown', e=>{ e.stopPropagation(); });
+      grp.addEventListener('click', e=>{ e.stopPropagation(); onClick(); });
+      return grp;
+    };
+    ctl.appendChild(mkBtn(c.left+14, '‹', ()=>moveCol(c.id,-1)));
+    ctl.appendChild(mkBtn(c.left+34, '›', ()=>moveCol(c.id, 1)));
+    ctl.appendChild(mkBtn(c.left+54, '⤢', ()=>editSize(c,'width',lbl)));
+    ctl.appendChild(mkBtn(c.left+74, '✕', ()=>removeCol(c.id), C.danger));
+    g.appendChild(ctl);
     svg.appendChild(g);
   }
 
@@ -429,27 +534,28 @@
     svg.appendChild(hit);
 
     const path = el('path',{d, fill:'none', stroke: sel?C.accent:C.ink, 'stroke-width': sel?2:1.5, 'marker-end':'url(#ah)'});
+    if(l.dashed) path.setAttribute('stroke-dasharray','6 4');
     path.style.pointerEvents='none';
     svg.appendChild(path);
   }
 
   function drawNode(n){
-    const x=absX(n), y=absY(n), c=center(n);
+    const x=absX(n), y=absY(n), c=center(n), col=fillOf(n);
     const sel = selected && selected.kind==='node' && selected.id===n.id;
     const g = el('g',{class:'node'});
     g.dataset.id = n.id;
 
     if(n.type==='task'){
-      g.appendChild(el('rect',{x,y,width:n.w,height:n.h,rx:8,fill:C.paper,stroke:C.ink,'stroke-width':1.5}));
+      g.appendChild(el('rect',{x,y,width:n.w,height:n.h,rx:8,fill:col.fill,stroke:col.stroke,'stroke-width':1.5}));
     } else if(n.type==='doc'){
       const w=n.w,h=n.h;
       const d=`M${x} ${y} h${w} v${h-10} q${-w/4} 11 ${-w/2} 0 q${-w/4} -11 ${-w/2} 0 z`;
-      g.appendChild(el('path',{d,fill:C.paper,stroke:C.ink,'stroke-width':1.5}));
+      g.appendChild(el('path',{d,fill:col.fill,stroke:col.stroke,'stroke-width':1.5}));
     } else if(n.type==='gateway'){
-      g.appendChild(el('polygon',{points:`${c.x},${y} ${x+n.w},${c.y} ${c.x},${y+n.h} ${x},${c.y}`,fill:C.paper,stroke:C.ink,'stroke-width':1.5}));
+      g.appendChild(el('polygon',{points:`${c.x},${y} ${x+n.w},${c.y} ${c.x},${y+n.h} ${x},${c.y}`,fill:col.fill,stroke:col.stroke,'stroke-width':1.5}));
     } else {
       const r=n.w/2, sw=n.type==='event-end'?3:1.5;
-      g.appendChild(el('circle',{cx:c.x,cy:c.y,r,fill:C.paper,stroke:C.ink,'stroke-width':sw}));
+      g.appendChild(el('circle',{cx:c.x,cy:c.y,r,fill:col.fill,stroke:col.stroke,'stroke-width':sw}));
     }
 
     // label (word-wrapped, vertically centred)
@@ -498,7 +604,7 @@
 
   function drawTip(){
     const t = el('text',{x:canvasWidth/2,y:140,'text-anchor':'middle','font-size':14,fill:C.inkSoft,'font-family':'var(--sans)'});
-    t.textContent = 'Add a lane and drop shapes from the toolbar above.';
+    t.textContent = 'Add lanes/columns and drop shapes from the toolbar above.';
     t.style.pointerEvents='none';
     svg.appendChild(t);
   }
@@ -582,7 +688,7 @@
     document.addEventListener('mousemove',mm); document.addEventListener('mouseup',mu);
   }
 
-  // ---------- in-place rename ----------
+  // ---------- in-place rename / size ----------
   function placeEditor(targetEl){
     const r = targetEl.getBoundingClientRect();
     const sr = stage.getBoundingClientRect();
@@ -604,12 +710,24 @@
     inp.addEventListener('keydown', ev=>{ if(ev.key==='Enter'){ev.preventDefault();commit();} else if(ev.key==='Escape'){inp.remove();} });
     inp.addEventListener('blur', commit, {once:true});
   }
-  function editLane(l, lblEl){
+  // rename a lane or column (both have a `name`)
+  function editName(obj, lblEl){
     const inp = placeEditor(lblEl);
     inp.style.width = '160px'; inp.style.height = '26px';
-    inp.value = l.name;
+    inp.value = obj.name;
     inp.focus(); inp.select();
-    const commit = ()=>{ l.name = inp.value.trim() || 'Lane'; inp.remove(); render(); };
+    const commit = ()=>{ obj.name = inp.value.trim() || 'Lane'; inp.remove(); render(); };
+    inp.addEventListener('keydown', ev=>{ if(ev.key==='Enter'){ev.preventDefault();commit();} else if(ev.key==='Escape'){inp.remove();} });
+    inp.addEventListener('blur', commit, {once:true});
+  }
+  // type an exact size: dim='height' (row) or 'width' (column)
+  function editSize(obj, dim, anchorEl){
+    const inp = placeEditor(anchorEl);
+    inp.type = 'number'; inp.style.width = '64px'; inp.style.height = '24px';
+    inp.value = Math.round(obj[dim]);
+    inp.focus(); inp.select();
+    const min = dim==='height' ? LANE_MIN : COL_MIN;
+    const commit = ()=>{ const v=parseInt(inp.value,10); if(!isNaN(v)) obj[dim]=Math.max(min, v); inp.remove(); render(); };
     inp.addEventListener('keydown', ev=>{ if(ev.key==='Enter'){ev.preventDefault();commit();} else if(ev.key==='Escape'){inp.remove();} });
     inp.addEventListener('blur', commit, {once:true});
   }
@@ -619,6 +737,13 @@
     computeTops();
     const startY = e.clientY, startH = l.height;
     const mm = ev=>{ l.height = Math.max(LANE_MIN, startH + (ev.clientY-startY)); render(); };
+    const mu = ()=>{ document.removeEventListener('mousemove',mm); document.removeEventListener('mouseup',mu); };
+    document.addEventListener('mousemove',mm); document.addEventListener('mouseup',mu);
+  }
+  function startColResize(c, e){
+    e.preventDefault(); e.stopPropagation();
+    const startX = e.clientX, startW = c.width;
+    const mm = ev=>{ c.width = Math.max(COL_MIN, startW + (ev.clientX-startX)); render(); };
     const mu = ()=>{ document.removeEventListener('mousemove',mm); document.removeEventListener('mouseup',mu); };
     document.addEventListener('mousemove',mm); document.addEventListener('mouseup',mu);
   }
@@ -646,6 +771,7 @@
     });
   });
   document.getElementById('addLane').addEventListener('click', ()=>{ addLane(); render(); });
+  document.getElementById('addCol').addEventListener('click', ()=>{ addCol(); render(); });
   const snapBtn = document.getElementById('snapBtn');
   function applySnapUI(){ snapBtn.classList.toggle('on', snap); stage.classList.toggle('snapping', snap); }
   snapBtn.addEventListener('click', ()=>{
@@ -656,7 +782,7 @@
   applySnapUI();
   document.getElementById('clearAll').addEventListener('click', ()=>{
     if(!confirm('Clear the whole diagram?')) return;
-    nodes=[]; links=[]; lanes=[]; selected=null; uid=1;
+    nodes=[]; links=[]; lanes=[]; cols=[]; selected=null; uid=1;
     currentId=null; currentToken=null;
     history.replaceState(null,'',location.pathname);
     addLane('Lane 1'); render();
@@ -666,6 +792,47 @@
     const v = parseInt(fontInput.value,10);
     if(!isNaN(v)) { fontSize = Math.max(8, Math.min(60, v)); render(); }
   });
+
+  // ---------- contextual toolbar (box colours / dashed line) ----------
+  const ctxbar = document.getElementById('ctxbar');
+  const swatchWrap = document.getElementById('swatches');
+  const colorLabel = document.getElementById('ctxColorLabel');
+  const dashBtn = document.getElementById('dashBtn');
+  Object.keys(PALETTE).forEach(key=>{
+    const b = document.createElement('button');
+    b.className='swatch'; b.dataset.key=key;
+    b.title = PALETTE[key].name;
+    b.style.background = PALETTE[key].fill;
+    b.style.borderColor = PALETTE[key].stroke;
+    b.addEventListener('click', ()=>{
+      if(selected && selected.kind==='node'){
+        const n=nodeById(selected.id);
+        if(n){ n.fill = (key==='default') ? null : key; render(); }
+      }
+    });
+    swatchWrap.appendChild(b);
+  });
+  dashBtn.addEventListener('click', ()=>{
+    if(selected && selected.kind==='link'){
+      const l=linkById(selected.id);
+      if(l){ l.dashed = !l.dashed; render(); }
+    }
+  });
+  function updateCtxBar(){
+    if(selected && selected.kind==='node'){
+      const n = nodeById(selected.id);
+      ctxbar.style.display='flex';
+      colorLabel.style.display=''; swatchWrap.style.display='inline-flex'; dashBtn.style.display='none';
+      [...swatchWrap.children].forEach(b=> b.classList.toggle('on', !!n && ((n.fill||'default')===b.dataset.key)));
+    } else if(selected && selected.kind==='link'){
+      const l = linkById(selected.id);
+      ctxbar.style.display='flex';
+      colorLabel.style.display='none'; swatchWrap.style.display='none'; dashBtn.style.display='inline-flex';
+      dashBtn.classList.toggle('on', !!(l && l.dashed));
+    } else {
+      ctxbar.style.display='none';
+    }
+  }
 
   // ---------- export ----------
   document.getElementById('exportSvg').addEventListener('click', openExport);
@@ -685,47 +852,59 @@
     back.querySelector('#exGo').addEventListener('click', ()=>{
       const fo = parseInt(back.querySelector('#exFont').value,10);
       const out = buildSvg(parseFloat(sc.value)||1, isNaN(fo)?0:fo);
-      download('swimlane-diagram.svg', out);
+      download('amista-chart.svg', out);
       back.remove();
     });
   }
   function buildSvg(scale, fontOverride){
-    computeTops();
-    const W = canvasWidth, H = totalH()+20;
+    computeLefts(); computeTops();
+    const W = canvasWidth, tb = topB(), H = totalH()+20;
     const baseFs = fontOverride || fontSize;
-    let svgStr = `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(W*scale)}" height="${Math.round(H*scale)}" viewBox="0 0 ${W} ${H}" font-family="Arial, sans-serif">`;
-    svgStr += `<defs><marker id="ah" markerWidth="10" markerHeight="10" refX="7" refY="3.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0 L8 3.5 L0 7 z" fill="${C.ink}"/></marker></defs>`;
-    svgStr += `<rect width="${W}" height="${H}" fill="${C.paper}"/>`;
+    let s = `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(W*scale)}" height="${Math.round(H*scale)}" viewBox="0 0 ${W} ${H}" font-family="Arial, sans-serif">`;
+    s += `<defs><marker id="ah" markerWidth="10" markerHeight="10" refX="7" refY="3.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0 L8 3.5 L0 7 z" fill="${C.ink}"/></marker></defs>`;
+    s += `<rect width="${W}" height="${H}" fill="${C.paper}"/>`;
+    // rows
     lanes.forEach(l=>{
-      svgStr += `<rect x="0" y="${l.top}" width="${W}" height="${l.height}" fill="none" stroke="${C.line}"/>`;
-      svgStr += `<rect x="0" y="${l.top}" width="${BAND}" height="${l.height}" fill="${C.band}" stroke="${C.line}"/>`;
+      s += `<rect x="0" y="${l.top}" width="${W}" height="${l.height}" fill="none" stroke="${C.line}"/>`;
+      s += `<rect x="0" y="${l.top}" width="${BAND}" height="${l.height}" fill="${C.band}" stroke="${C.line}"/>`;
       const cy = l.top + l.height/2;
-      svgStr += `<text x="16" y="${cy}" transform="rotate(-90 16 ${cy})" text-anchor="middle" dominant-baseline="central" font-size="12" fill="${C.inkSoft}">${escapeXml(l.name)}</text>`;
+      s += `<text x="16" y="${cy}" transform="rotate(-90 16 ${cy})" text-anchor="middle" dominant-baseline="central" font-size="12" fill="${C.inkSoft}">${escapeXml(l.name)}</text>`;
     });
+    // columns
+    if(tb) s += `<rect x="0" y="0" width="${BAND}" height="${tb}" fill="${C.band}" stroke="${C.line}"/>`;
+    cols.forEach(c=>{
+      s += `<rect x="${c.left}" y="0" width="${c.width}" height="${tb}" fill="${C.band}" stroke="${C.line}"/>`;
+      s += `<text x="${c.left+c.width/2}" y="${tb/2}" text-anchor="middle" dominant-baseline="central" font-size="12" fill="${C.inkSoft}">${escapeXml(c.name)}</text>`;
+      s += `<line x1="${c.left}" y1="${tb}" x2="${c.left}" y2="${totalH()}" stroke="${C.line}"/>`;
+      s += `<line x1="${c.left+c.width}" y1="${tb}" x2="${c.left+c.width}" y2="${totalH()}" stroke="${C.line}"/>`;
+    });
+    // links
     links.forEach(l=>{
       const a=nodeById(l.from), b=nodeById(l.to); if(!a||!b) return;
       const p1=anchorPoint(a,l.fromSide), p2=anchorPoint(b,l.toSide);
-      svgStr += `<path d="${elbow(p1.x,p1.y,p2.x,p2.y,l.fromSide,l.toSide)}" fill="none" stroke="${C.ink}" stroke-width="1.5" marker-end="url(#ah)"/>`;
+      const dash = l.dashed ? ` stroke-dasharray="6 4"` : '';
+      s += `<path d="${elbow(p1.x,p1.y,p2.x,p2.y,l.fromSide,l.toSide)}" fill="none" stroke="${C.ink}" stroke-width="1.5" marker-end="url(#ah)"${dash}/>`;
     });
+    // nodes
     nodes.forEach(n=>{
-      const x=absX(n), y=absY(n), c=center(n);
+      const x=absX(n), y=absY(n), c=center(n), col=fillOf(n);
       if(n.type==='task'){
-        svgStr += `<rect x="${x}" y="${y}" width="${n.w}" height="${n.h}" rx="8" fill="${C.paper}" stroke="${C.ink}" stroke-width="1.5"/>`;
+        s += `<rect x="${x}" y="${y}" width="${n.w}" height="${n.h}" rx="8" fill="${col.fill}" stroke="${col.stroke}" stroke-width="1.5"/>`;
       } else if(n.type==='doc'){
-        svgStr += `<path d="M${x} ${y} h${n.w} v${n.h-10} q${-n.w/4} 11 ${-n.w/2} 0 q${-n.w/4} -11 ${-n.w/2} 0 z" fill="${C.paper}" stroke="${C.ink}" stroke-width="1.5"/>`;
+        s += `<path d="M${x} ${y} h${n.w} v${n.h-10} q${-n.w/4} 11 ${-n.w/2} 0 q${-n.w/4} -11 ${-n.w/2} 0 z" fill="${col.fill}" stroke="${col.stroke}" stroke-width="1.5"/>`;
       } else if(n.type==='gateway'){
-        svgStr += `<polygon points="${c.x},${y} ${x+n.w},${c.y} ${c.x},${y+n.h} ${x},${c.y}" fill="${C.paper}" stroke="${C.ink}" stroke-width="1.5"/>`;
+        s += `<polygon points="${c.x},${y} ${x+n.w},${c.y} ${c.x},${y+n.h} ${x},${c.y}" fill="${col.fill}" stroke="${col.stroke}" stroke-width="1.5"/>`;
       } else {
         const r=n.w/2, sw=n.type==='event-end'?3:1.5;
-        svgStr += `<circle cx="${c.x}" cy="${c.y}" r="${r}" fill="${C.paper}" stroke="${C.ink}" stroke-width="${sw}"/>`;
+        s += `<circle cx="${c.x}" cy="${c.y}" r="${r}" fill="${col.fill}" stroke="${col.stroke}" stroke-width="${sw}"/>`;
       }
       const fs = n.type.startsWith('event') ? Math.max(10, baseFs-1) : baseFs;
       const lines = wrap(n.text, n.w-10, fs), lh=fs+2, startY=c.y-(lines.length-1)*lh/2;
       lines.forEach((ln,i)=>{
-        svgStr += `<text x="${c.x}" y="${startY+i*lh}" text-anchor="middle" dominant-baseline="central" font-size="${fs}" fill="${C.ink}">${escapeXml(ln)}</text>`;
+        s += `<text x="${c.x}" y="${startY+i*lh}" text-anchor="middle" dominant-baseline="central" font-size="${fs}" fill="${C.ink}">${escapeXml(ln)}</text>`;
       });
     });
-    return svgStr + `</svg>`;
+    return s + `</svg>`;
   }
   function download(name, text){
     const blob = new Blob([text], {type:'image/svg+xml'});
@@ -744,30 +923,32 @@
   }
   function serialize(){
     return {
-      v: 2,
+      v: 3,
       canvasWidth,
       fontSize,
       lanes: lanes.map(l=>({id:l.id, name:l.name, height:l.height})),
-      nodes: nodes.map(n=>({id:n.id, type:n.type, text:n.text, laneId:n.laneId, lx:n.lx, ly:n.ly, w:n.w, h:n.h})),
-      links: links.map(l=>({id:l.id, from:l.from, to:l.to, fromSide:l.fromSide, toSide:l.toSide})),
+      cols:  cols.map(c=>({id:c.id, name:c.name, width:c.width})),
+      nodes: nodes.map(n=>({id:n.id, type:n.type, text:n.text, laneId:n.laneId, lx:n.lx, ly:n.ly, w:n.w, h:n.h, fill:n.fill||null})),
+      links: links.map(l=>({id:l.id, from:l.from, to:l.to, fromSide:l.fromSide, toSide:l.toSide, dashed:!!l.dashed})),
     };
   }
   function deserialize(data){
-    nodes=[]; links=[]; lanes=[]; selected=null; uid=1;
+    nodes=[]; links=[]; lanes=[]; cols=[]; selected=null; uid=1;
     fontSize = (typeof data.fontSize==='number') ? data.fontSize : 13;
     fontInput.value = fontSize;
     canvasWidth = data.canvasWidth || 1400;
     const idmap = {};
     (data.lanes||[]).forEach(l=>{ const lane=addLane(l.name, l.height); idmap[l.id]=lane.id; });
     if(!lanes.length) addLane('Lane 1');
+    (data.cols||[]).forEach(c=> addCol(c.name, c.width));               // v3; absent in v1/v2 -> none
     (data.nodes||[]).forEach(n=>{
       const laneId = idmap[n.laneId] || lanes[0].id;
-      const node = addNode(n.type, n.text, laneId, n.lx, n.ly, n.w, n.h);  // w/h undefined -> DEF defaults (v1 migration)
+      const node = addNode(n.type, n.text, laneId, n.lx, n.ly, n.w, n.h, n.fill); // w/h/fill default for v1/v2
       idmap[n.id] = node.id;
     });
     (data.links||[]).forEach(l=>{
       const from=idmap[l.from], to=idmap[l.to];
-      if(from && to) addLink(from, to, l.fromSide||'e', l.toSide||'w');
+      if(from && to) addLink(from, to, l.fromSide||'e', l.toSide||'w', l.dashed);
     });
     render();
   }
@@ -833,7 +1014,7 @@
       try{ localStorage.removeItem('swim:token:'+currentId); }catch(_){}
       currentId = null; currentToken = null;
       history.replaceState(null,'', location.pathname);
-      nodes=[]; links=[]; lanes=[]; selected=null; uid=1;     // reset to a fresh canvas
+      nodes=[]; links=[]; lanes=[]; cols=[]; selected=null; uid=1;   // reset to a fresh canvas
       addLane('Customer',180); addLane('Internal',180);
       render(); refreshDeleteState();
       setStatus('Deleted', 'ok');
