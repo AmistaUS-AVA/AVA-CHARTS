@@ -250,7 +250,9 @@
   const GRID = 20;        // snap-to-grid step (matches the stage background grid)
   const LANE_MIN = 90;    // min row height
   const COL_MIN = 80;     // min column width
-  let canvasWidth = 1400;
+  const WIDTH_MIN = BAND + 160;   // min canvas/row width
+  const WIDTH_DEF = 1000;         // default canvas/row width
+  let canvasWidth = WIDTH_DEF;
 
   const DEF = {
     'task':        {w:120, h:54},
@@ -276,6 +278,7 @@
     if(cols.length && x>canvasWidth) canvasWidth = x;   // grow to fit columns
     return x;
   }
+  function minWidth(){ const cr = cols.length ? BAND + cols.reduce((s,c)=>s+c.width,0) : 0; return Math.max(WIDTH_MIN, cr); }
   function totalH(){ return topB() + lanes.reduce((s,l)=>s+l.height,0); }
   function absX(n){ return BAND + n.lx; }
   function absY(n){ const l=laneById(n.laneId); return (l?l.top:0) + n.ly; }
@@ -452,6 +455,11 @@
     cols.forEach(drawCol);
     links.forEach(drawLink);
     nodes.forEach(drawNode);
+    // draggable right edge to trim/extend the overall width
+    const wgrip = el('rect',{x:Math.max(0,canvasWidth-3),y:0,width:6,height:H,fill:'transparent'});
+    wgrip.style.cursor='ew-resize';
+    wgrip.addEventListener('mousedown', startCanvasResize);
+    svg.appendChild(wgrip);
     if(nodes.length===0 && cols.length===0) drawTip();
     updateCtxBar();
   }
@@ -792,6 +800,13 @@
     const mu = ()=>{ document.removeEventListener('mousemove',mm); document.removeEventListener('mouseup',mu); };
     document.addEventListener('mousemove',mm); document.addEventListener('mouseup',mu);
   }
+  function startCanvasResize(e){
+    e.preventDefault(); e.stopPropagation();
+    const startX = e.clientX, startW = canvasWidth;
+    const mm = ev=>{ canvasWidth = Math.max(minWidth(), startW + (ev.clientX-startX)); nodes.forEach(clampNode); render(); };
+    const mu = ()=>{ document.removeEventListener('mousemove',mm); document.removeEventListener('mouseup',mu); };
+    document.addEventListener('mousemove',mm); document.addEventListener('mouseup',mu);
+  }
 
   // ---------- global listeners ----------
   svg.addEventListener('mousedown', e=>{ if(e.target===svg){ selected=null; render(); } });
@@ -828,6 +843,7 @@
   document.getElementById('clearAll').addEventListener('click', ()=>{
     if(!confirm('Clear the whole diagram?')) return;
     nodes=[]; links=[]; lanes=[]; cols=[]; selected=null; uid=1;
+    canvasWidth=WIDTH_DEF;
     currentId=null; currentToken=null;
     history.replaceState(null,'',location.pathname);
     addLane('Lane 1'); render();
@@ -992,7 +1008,7 @@
     nodes=[]; links=[]; lanes=[]; cols=[]; selected=null; uid=1;
     fontSize = (typeof data.fontSize==='number') ? data.fontSize : 13;
     fontInput.value = fontSize;
-    canvasWidth = data.canvasWidth || 1400;
+    canvasWidth = data.canvasWidth || WIDTH_DEF;
     const idmap = {};
     (data.lanes||[]).forEach(l=>{ const lane=addLane(l.name, l.height); idmap[l.id]=lane.id; });
     if(!lanes.length) addLane('Lane 1');
@@ -1070,7 +1086,7 @@
       try{ localStorage.removeItem('swim:token:'+currentId); }catch(_){}
       currentId = null; currentToken = null;
       history.replaceState(null,'', location.pathname);
-      nodes=[]; links=[]; lanes=[]; cols=[]; selected=null; uid=1;   // reset to a fresh canvas
+      nodes=[]; links=[]; lanes=[]; cols=[]; selected=null; uid=1; canvasWidth=WIDTH_DEF;   // reset to a fresh canvas
       addLane('Customer',180); addLane('Internal',180);
       render(); refreshDeleteState();
       setStatus('Deleted', 'ok');
