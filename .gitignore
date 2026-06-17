@@ -7,5 +7,4 @@ dist/
 
 # Test / tooling artifacts
 .playwright-mcp/
-swimlane-initial.png
-swimlane-loaded.png
+*.png
