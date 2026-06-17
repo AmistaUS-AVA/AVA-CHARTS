@@ -27,13 +27,15 @@ swimlane-editor/
 
 ## The API contract
 
-The front end and Worker agree on exactly two endpoints, gated by a per-diagram **owner token**. If you change one side, change the other and this section.
+The front end and Worker agree on three endpoints, gated by a per-diagram **owner token**. If you change one side, change the other and this section.
 
 - `POST /api/diagrams`:
   - **Create** — body `{ diagram }` (no id). Server mints both the id **and** a secret `token`, stores `tokenHash`, and returns `{ id, token, updatedAt }`. The token is returned **only** here.
   - **Update** — body `{ id, token, diagram }`. The id must already exist and `SHA-256(token)` must match the stored `tokenHash`, else `403`. The server never honours a client-supplied **new** id (anti-squatting): an unknown id returns `404`; a legacy record with no `tokenHash` returns `409` (read-only).
-  - Rejects diagrams whose serialized bytes exceed `MAX_BYTES` (256 KB) with `413` (byte-accurate, via `TextEncoder`).
+  - Rejects an **empty** diagram (no `nodes`) with `422`, and diagrams whose serialized bytes exceed `MAX_BYTES` (256 KB) with `413` (byte-accurate, via `TextEncoder`).
+  - Per-IP write throttle via the Workers rate-limit binding (`WRITE_LIMITER`) → `429` when exceeded.
 - `GET /api/diagrams/:id` — open read (share-by-link). Returns `{ id, diagram, updatedAt }` or 404. **Never** returns the token/hash.
+- `DELETE /api/diagrams/:id` — owner-only. Token via `X-Owner-Token` header (or `?token=`); `SHA-256(token)` must match the stored `tokenHash`. Returns `{ ok: true }`, else `403` (bad/absent token), `404` (unknown id), or `409` (legacy record with no `tokenHash`).
 
 IDs are short random strings from a no-ambiguous-characters alphabet (`makeId` in the Worker), validated against `/^[a-z0-9]{6,24}$/i`. The client keeps its token in `localStorage` under `swim:token:<id>`; viewers without the token can still load, and Save transparently creates their own copy.
 
