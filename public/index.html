@@ -776,6 +776,7 @@
     return res;
   }
   async function save(){
+    if(!nodes.length){ setStatus('Nothing to save yet — add a shape first', 'err'); return; }
     setStatus('Saving…');
     try{
       let res = await postDiagram(true);

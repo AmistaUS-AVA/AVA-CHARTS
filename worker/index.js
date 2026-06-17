@@ -84,6 +84,10 @@ export default class extends WorkerEntrypoint {
     if (!diagram || typeof diagram !== "object") {
       return json({ error: "Missing diagram" }, 400);
     }
+    // Don't persist empty diagrams (no shapes) — keeps KV free of throwaway records.
+    if (!Array.isArray(diagram.nodes) || diagram.nodes.length === 0) {
+      return json({ error: "Refusing to save an empty diagram" }, 422);
+    }
 
     const serialized = JSON.stringify(diagram);
     if (new TextEncoder().encode(serialized).byteLength > MAX_BYTES) {
