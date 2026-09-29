@@ -8,3 +8,7 @@ dist/
 # Test / tooling artifacts
 .playwright-mcp/
 *.png
+.env*
+*.pem
+*.key
+*.pfx
